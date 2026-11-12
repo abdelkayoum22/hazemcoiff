@@ -37,7 +37,13 @@ export function setStoredAdminToken(token: string | null): void {
 
 async function requestJson<T>(url: string, options?: RequestInit): Promise<T> {
   const res = await fetch(url, options);
-  const data = await res.json().catch(() => ({}));
+  const contentType = res.headers.get('content-type') || '';
+  if (!contentType.includes('application/json')) {
+    const err = new Error('Réponse serveur invalide.') as Error & { status?: number };
+    err.status = res.status;
+    throw err;
+  }
+  const data = await res.json();
   if (!res.ok) {
     const err = new Error(data?.error || 'Une erreur est survenue.') as Error & { status?: number };
     err.status = res.status;
@@ -54,8 +60,13 @@ function adminHeaders(token: string): HeadersInit {
 }
 
 // Public APIs
-export function fetchPublicBootstrap(): Promise<PublicBootstrapData> {
-  return requestJson<PublicBootstrapData>('/api/public/bootstrap');
+export async function fetchPublicBootstrap(): Promise<PublicBootstrapData> {
+  try {
+    return await requestJson<PublicBootstrapData>('/api/public/bootstrap');
+  } catch {
+    await new Promise((r) => setTimeout(r, 400));
+    return requestJson<PublicBootstrapData>('/api/public/bootstrap');
+  }
 }
 
 export function fetchMonthAvailability(

@@ -1,7 +1,7 @@
 import { Suspense, lazy, useCallback, useEffect, useRef, useState } from 'react';
 import { MotionConfig } from 'motion/react';
 import { fetchPublicBootstrap } from './lib/api';
-import type { PublicBootstrapData, ServiceItem } from './types/barbershop';
+import type { BusinessHour, PublicBootstrapData, ServiceItem, ShopSettings } from './types/barbershop';
 import { Navbar } from './components/Navbar';
 import { HeroSection } from './components/HeroSection';
 import { ServicesSection } from './components/ServicesSection';
@@ -16,9 +16,47 @@ const AdminDashboard = lazy(() =>
   import('./components/AdminDashboard').then((m) => ({ default: m.AdminDashboard }))
 );
 
+const FALLBACK_HOURS: BusinessHour[] = [
+  { day_of_week: 1, day_name: 'Lundi', is_open: 1, open_time: '13:00', close_time: '20:30' },
+  { day_of_week: 2, day_name: 'Mardi', is_open: 1, open_time: '10:00', close_time: '20:30' },
+  { day_of_week: 3, day_name: 'Mercredi', is_open: 1, open_time: '10:00', close_time: '20:30' },
+  { day_of_week: 4, day_name: 'Jeudi', is_open: 1, open_time: '10:00', close_time: '20:30' },
+  { day_of_week: 5, day_name: 'Vendredi', is_open: 1, open_time: '10:00', close_time: '20:30' },
+  { day_of_week: 6, day_name: 'Samedi', is_open: 1, open_time: '10:00', close_time: '20:30' },
+  { day_of_week: 0, day_name: 'Dimanche', is_open: 1, open_time: '10:00', close_time: '20:30' },
+];
+
+const FALLBACK_SETTINGS: ShopSettings = {
+  shop_name: 'Hazem Coiff',
+  tagline: 'Salon de coiffure & Barbier · Boumhel El Bassatine',
+  address: '52 Av. de Paris',
+  city: 'Boumhel El Bassatine',
+  phone: '25 180 013',
+  email: 'hazemcoiffmegrine@gmail.com',
+  instagram_url: 'https://www.instagram.com/hazemcoiff/',
+  facebook_url: 'https://www.facebook.com/profile.php?id=61552967307064',
+  slot_interval_minutes: '30',
+  barber_name: 'Hazem',
+  barber_role: 'Maître Coiffeur & Barbier · Note 5,0 / 5 (15 avis)',
+  about_title: 'Le souci du détail, l’accueil et la maîtrise du geste.',
+  about_bio:
+    'Installé au 52 Avenue de Paris à Boumhel El Bassatine, Hazem Coiff vous accueille 7 jours sur 7.',
+  hero_image: '/assets/aistudio/image_1a42b0d4.png',
+  about_image: '/assets/aistudio/Capture_d__cran_2026-11-12_200313_cbb7a2be.png',
+  logo_image: '/assets/aistudio/image_0d689771.png',
+};
+
 function isAdminLocation(): boolean {
   const cleanPath = window.location.pathname.replace(/\/+$/, '');
-  return cleanPath === '/admin' || window.location.hash === '#admin';
+  const hash = window.location.hash;
+  const search = new URLSearchParams(window.location.search);
+  return (
+    cleanPath === '/admin' ||
+    cleanPath.startsWith('/admin/') ||
+    hash === '#admin' ||
+    hash.startsWith('#/admin') ||
+    search.has('admin')
+  );
 }
 
 export default function App() {
@@ -120,6 +158,27 @@ export default function App() {
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
+  if (viewMode === 'admin') {
+    return (
+      <MotionConfig reducedMotion="user">
+        <Suspense
+          fallback={
+            <div className="min-h-screen bg-[#000000] flex items-center justify-center p-6 text-xs tracking-[0.2em] uppercase text-[#8C8889]">
+              Chargement de l’espace admin...
+            </div>
+          }
+        >
+          <AdminDashboard
+            initialHours={data?.businessHours ?? FALLBACK_HOURS}
+            initialSettings={data?.settings ?? FALLBACK_SETTINGS}
+            onExitAdmin={exitAdmin}
+            onDataMutated={loadBootstrap}
+          />
+        </Suspense>
+      </MotionConfig>
+    );
+  }
+
   if (loading) {
     return (
       <div className="min-h-screen bg-[#000000] flex flex-col items-center justify-center p-6 text-center">
@@ -151,68 +210,51 @@ export default function App() {
 
   return (
     <MotionConfig reducedMotion="user">
-      {viewMode === 'admin' ? (
-        <Suspense
-          fallback={
-            <div className="min-h-screen bg-[#000000] flex items-center justify-center p-6 text-xs tracking-[0.2em] uppercase text-[#8C8889]">
-              Chargement de l’espace admin...
-            </div>
-          }
-        >
-          <AdminDashboard
-            initialHours={data.businessHours}
-            initialSettings={data.settings}
-            onExitAdmin={exitAdmin}
-            onDataMutated={loadBootstrap}
-          />
-        </Suspense>
-      ) : (
-        <div className="min-h-screen bg-[#000000] text-[#FFFFFF]">
-          <Navbar
-            shopName={data.settings.shop_name}
-            logoUrl={data.settings.logo_image}
+      <div className="min-h-screen bg-[#000000] text-[#FFFFFF]">
+        <Navbar
+          shopName={data.settings.shop_name}
+          logoUrl={data.settings.logo_image}
+          onOpenBooking={() => openBooking(null)}
+        />
+
+        <main>
+          <HeroSection
+            settings={data.settings}
             onOpenBooking={() => openBooking(null)}
           />
 
-          <main>
-            <HeroSection
-              settings={data.settings}
-              onOpenBooking={() => openBooking(null)}
-            />
+          <ServicesSection
+            services={data.services}
+            onSelectServiceForBooking={(svc) => openBooking(svc)}
+          />
 
-            <ServicesSection
+          <AboutAndPillarsSection
+            settings={data.settings}
+            onOpenBooking={() => openBooking(null)}
+          />
+
+          <GalleryAndReviewsSection gallery={data.gallery} />
+
+          <ContactAndFooter
+            settings={data.settings}
+            businessHours={data.businessHours}
+            onOpenBooking={() => openBooking(null)}
+            onOpenAdmin={enterAdmin}
+          />
+        </main>
+
+        {bookingOpen && (
+          <Suspense fallback={null}>
+            <BookingModal
+              isOpen={bookingOpen}
               services={data.services}
-              onSelectServiceForBooking={(svc) => openBooking(svc)}
+              initialService={preselectedService}
+              onClose={() => setBookingOpen(false)}
+              onBookingCompleted={loadBootstrap}
             />
-
-            <AboutAndPillarsSection
-              settings={data.settings}
-              onOpenBooking={() => openBooking(null)}
-            />
-
-            <GalleryAndReviewsSection gallery={data.gallery} />
-
-            <ContactAndFooter
-              settings={data.settings}
-              businessHours={data.businessHours}
-              onOpenBooking={() => openBooking(null)}
-              onOpenAdmin={enterAdmin}
-            />
-          </main>
-
-          {bookingOpen && (
-            <Suspense fallback={null}>
-              <BookingModal
-                isOpen={bookingOpen}
-                services={data.services}
-                initialService={preselectedService}
-                onClose={() => setBookingOpen(false)}
-                onBookingCompleted={loadBootstrap}
-              />
-            </Suspense>
-          )}
-        </div>
-      )}
+          </Suspense>
+        )}
+      </div>
     </MotionConfig>
   );
 }

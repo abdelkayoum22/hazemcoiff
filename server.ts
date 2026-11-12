@@ -2,7 +2,6 @@ import 'dotenv/config';
 import express from 'express';
 import type { Response, NextFunction } from 'express';
 import path from 'node:path';
-import zlib from 'node:zlib';
 import { fileURLToPath } from 'node:url';
 import {
   checkRateLimit,
@@ -68,32 +67,6 @@ app.use((_req, res, next: NextFunction) => {
   res.setHeader('X-Content-Type-Options', 'nosniff');
   res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
   res.setHeader('Permissions-Policy', 'camera=(), microphone=(), geolocation=()');
-  next();
-});
-
-// Lightweight gzip compression for JSON API payloads
-app.use('/api', (req, res, next: NextFunction) => {
-  if (req.path === '/public/events') {
-    next();
-    return;
-  }
-  const acceptEncoding = String(req.headers['accept-encoding'] || '');
-  if (!acceptEncoding.includes('gzip')) {
-    next();
-    return;
-  }
-  const originalJson = res.json.bind(res);
-  res.json = ((body: unknown) => {
-    const serialized = JSON.stringify(body);
-    if (serialized.length < 1024) {
-      return originalJson(body);
-    }
-    const compressed = zlib.gzipSync(Buffer.from(serialized, 'utf8'));
-    res.setHeader('Content-Type', 'application/json; charset=utf-8');
-    res.setHeader('Content-Encoding', 'gzip');
-    res.setHeader('Vary', 'Accept-Encoding');
-    return res.send(compressed);
-  }) as Response['json'];
   next();
 });
 
@@ -836,6 +809,10 @@ app.put('/api/admin/settings', requireAdminAuth, async (req, res) => {
     console.error('Settings update error:', error);
     res.status(500).json({ error: 'Erreur lors de l’enregistrement des paramètres.' });
   }
+});
+
+app.use('/api', (_req, res) => {
+  res.status(404).json({ error: 'Route API introuvable.' });
 });
 
 // ---------------- VITE / STATIC SERVING ----------------
