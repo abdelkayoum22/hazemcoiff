@@ -1,5 +1,6 @@
 import crypto from 'node:crypto';
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import type { Request, Response, NextFunction } from 'express';
 
@@ -12,7 +13,10 @@ function resolveTokenSecret(): string {
     return crypto.createHmac('sha256', 'hazem-coiff-token-v1').update(serviceKey).digest('hex');
   }
 
-  const secretPath = path.resolve('./data/.token_secret');
+  const secretPath =
+    process.env.VERCEL || process.env.AWS_LAMBDA_FUNCTION_NAME
+      ? path.join(os.tmpdir(), '.hazem_token_secret')
+      : path.resolve('./data/.token_secret');
   try {
     if (fs.existsSync(secretPath)) {
       const existing = fs.readFileSync(secretPath, 'utf8').trim();

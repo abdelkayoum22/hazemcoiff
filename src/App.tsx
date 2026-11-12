@@ -91,11 +91,31 @@ export default function App() {
 
   useEffect(() => {
     let source: EventSource | null = null;
+    let pollTimer: number | null = null;
+    let errorCount = 0;
+
+    const startPollingFallback = () => {
+      if (pollTimer !== null) return;
+      pollTimer = window.setInterval(() => {
+        if (document.visibilityState === 'visible') {
+          loadBootstrap();
+          window.dispatchEvent(new CustomEvent('hazem:sync'));
+        }
+      }, 25000);
+    };
+
     try {
       source = new EventSource('/api/public/events');
       source.onmessage = (event) => {
+        errorCount = 0;
         try {
           const parsed = JSON.parse(event.data);
+          if (parsed?.serverless) {
+            source?.close();
+            source = null;
+            startPollingFallback();
+            return;
+          }
           if (parsed?.type === 'refresh') {
             loadBootstrap();
             window.dispatchEvent(new CustomEvent('hazem:sync'));
@@ -104,8 +124,16 @@ export default function App() {
           // ignore malformed messages
         }
       };
+      source.onerror = () => {
+        errorCount += 1;
+        if (errorCount >= 2) {
+          source?.close();
+          source = null;
+          startPollingFallback();
+        }
+      };
     } catch {
-      // ignore if EventSource unavailable
+      startPollingFallback();
     }
 
     const handleVisibility = () => {
@@ -117,6 +145,9 @@ export default function App() {
 
     return () => {
       source?.close();
+      if (pollTimer !== null) {
+        window.clearInterval(pollTimer);
+      }
       document.removeEventListener('visibilitychange', handleVisibility);
     };
   }, [loadBootstrap]);

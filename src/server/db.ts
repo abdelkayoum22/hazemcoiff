@@ -1,109 +1,151 @@
-import { DatabaseSync } from 'node:sqlite';
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
+import { createRequire } from 'node:module';
 import { hashPassword, verifyPassword } from './auth.ts';
 
-const dbPath = process.env.DB_PATH || './data/barbershop.db';
-const dbDir = path.dirname(path.resolve(dbPath));
-if (!fs.existsSync(dbDir)) {
-  fs.mkdirSync(dbDir, { recursive: true });
+interface SqliteStatementLike {
+  all: (...args: unknown[]) => unknown[];
+  get: (...args: unknown[]) => unknown;
+  run: (...args: unknown[]) => { changes: number; lastInsertRowid: number | bigint };
 }
 
-export const db = new DatabaseSync(path.resolve(dbPath));
+export interface SqliteDbLike {
+  exec: (sql: string) => void;
+  prepare: (sql: string) => SqliteStatementLike;
+}
 
-db.exec(`
-  PRAGMA journal_mode = WAL;
-  PRAGMA foreign_keys = ON;
+function createSqliteInstance(): { db: SqliteDbLike; available: boolean } {
+  try {
+    const require = createRequire(import.meta.url);
+    const { DatabaseSync } = require('node:sqlite') as {
+      DatabaseSync: new (path: string) => SqliteDbLike;
+    };
 
-  CREATE TABLE IF NOT EXISTS services (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    name TEXT NOT NULL,
-    description TEXT NOT NULL,
-    price REAL NOT NULL,
-    duration_minutes INTEGER NOT NULL,
-    image_url TEXT NOT NULL,
-    is_active INTEGER NOT NULL DEFAULT 1,
-    sort_order INTEGER NOT NULL DEFAULT 0
-  );
+    const isServerless = Boolean(process.env.VERCEL || process.env.AWS_LAMBDA_FUNCTION_NAME);
+    const dbPath =
+      process.env.DB_PATH ||
+      (isServerless ? path.join(os.tmpdir(), 'barbershop.db') : './data/barbershop.db');
+    const resolved = path.resolve(dbPath);
+    const dbDir = path.dirname(resolved);
+    if (!fs.existsSync(dbDir)) {
+      fs.mkdirSync(dbDir, { recursive: true });
+    }
+    const instance = new DatabaseSync(resolved);
+    instance.exec(`
+      PRAGMA journal_mode = WAL;
+      PRAGMA foreign_keys = ON;
 
-  CREATE TABLE IF NOT EXISTS customers (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    first_name TEXT NOT NULL,
-    last_name TEXT NOT NULL,
-    phone TEXT NOT NULL UNIQUE,
-    created_at TEXT NOT NULL DEFAULT (datetime('now'))
-  );
+      CREATE TABLE IF NOT EXISTS services (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        name TEXT NOT NULL,
+        description TEXT NOT NULL,
+        price REAL NOT NULL,
+        duration_minutes INTEGER NOT NULL,
+        image_url TEXT NOT NULL,
+        is_active INTEGER NOT NULL DEFAULT 1,
+        sort_order INTEGER NOT NULL DEFAULT 0
+      );
 
-  CREATE TABLE IF NOT EXISTS appointments (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    reference TEXT NOT NULL UNIQUE,
-    customer_id INTEGER NOT NULL REFERENCES customers(id) ON DELETE CASCADE,
-    service_id INTEGER NOT NULL REFERENCES services(id),
-    service_name TEXT NOT NULL,
-    appointment_date TEXT NOT NULL,
-    start_time TEXT NOT NULL,
-    end_time TEXT NOT NULL,
-    duration_minutes INTEGER NOT NULL,
-    price REAL NOT NULL,
-    status TEXT NOT NULL CHECK(status IN ('pending', 'confirmed', 'completed', 'cancelled')) DEFAULT 'confirmed',
-    notes TEXT NOT NULL DEFAULT '',
-    created_at TEXT NOT NULL DEFAULT (datetime('now'))
-  );
+      CREATE TABLE IF NOT EXISTS customers (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        first_name TEXT NOT NULL,
+        last_name TEXT NOT NULL,
+        phone TEXT NOT NULL UNIQUE,
+        created_at TEXT NOT NULL DEFAULT (datetime('now'))
+      );
 
-  CREATE INDEX IF NOT EXISTS idx_appointments_date_status
-    ON appointments(appointment_date, status);
+      CREATE TABLE IF NOT EXISTS appointments (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        reference TEXT NOT NULL UNIQUE,
+        customer_id INTEGER NOT NULL REFERENCES customers(id) ON DELETE CASCADE,
+        service_id INTEGER NOT NULL REFERENCES services(id),
+        service_name TEXT NOT NULL,
+        appointment_date TEXT NOT NULL,
+        start_time TEXT NOT NULL,
+        end_time TEXT NOT NULL,
+        duration_minutes INTEGER NOT NULL,
+        price REAL NOT NULL,
+        status TEXT NOT NULL CHECK(status IN ('pending', 'confirmed', 'completed', 'cancelled')) DEFAULT 'confirmed',
+        notes TEXT NOT NULL DEFAULT '',
+        created_at TEXT NOT NULL DEFAULT (datetime('now'))
+      );
 
-  CREATE TABLE IF NOT EXISTS business_hours (
-    day_of_week INTEGER PRIMARY KEY,
-    day_name TEXT NOT NULL,
-    is_open INTEGER NOT NULL DEFAULT 1,
-    open_time TEXT NOT NULL,
-    close_time TEXT NOT NULL
-  );
+      CREATE INDEX IF NOT EXISTS idx_appointments_date_status
+        ON appointments(appointment_date, status);
 
-  CREATE TABLE IF NOT EXISTS days_off (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    date TEXT NOT NULL UNIQUE,
-    reason TEXT NOT NULL DEFAULT 'Fermeture exceptionnelle'
-  );
+      CREATE TABLE IF NOT EXISTS business_hours (
+        day_of_week INTEGER PRIMARY KEY,
+        day_name TEXT NOT NULL,
+        is_open INTEGER NOT NULL DEFAULT 1,
+        open_time TEXT NOT NULL,
+        close_time TEXT NOT NULL
+      );
 
-  CREATE TABLE IF NOT EXISTS time_slot_rules (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    scope TEXT NOT NULL CHECK(scope IN ('global', 'date')),
-    target_date TEXT,
-    slot_time TEXT NOT NULL,
-    rule_type TEXT NOT NULL CHECK(rule_type IN ('add', 'block')),
-    label TEXT NOT NULL DEFAULT ''
-  );
+      CREATE TABLE IF NOT EXISTS days_off (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        date TEXT NOT NULL UNIQUE,
+        reason TEXT NOT NULL DEFAULT 'Fermeture exceptionnelle'
+      );
 
-  CREATE TABLE IF NOT EXISTS gallery_images (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    title TEXT NOT NULL,
-    category TEXT NOT NULL,
-    image_url TEXT NOT NULL,
-    sort_order INTEGER NOT NULL DEFAULT 0
-  );
+      CREATE TABLE IF NOT EXISTS time_slot_rules (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        scope TEXT NOT NULL CHECK(scope IN ('global', 'date')),
+        target_date TEXT,
+        slot_time TEXT NOT NULL,
+        rule_type TEXT NOT NULL CHECK(rule_type IN ('add', 'block')),
+        label TEXT NOT NULL DEFAULT ''
+      );
 
-  CREATE TABLE IF NOT EXISTS shop_settings (
-    key TEXT PRIMARY KEY,
-    value TEXT NOT NULL
-  );
+      CREATE TABLE IF NOT EXISTS gallery_images (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        title TEXT NOT NULL,
+        category TEXT NOT NULL,
+        image_url TEXT NOT NULL,
+        sort_order INTEGER NOT NULL DEFAULT 0
+      );
 
-  CREATE TABLE IF NOT EXISTS admin_users (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    username TEXT NOT NULL UNIQUE,
-    password_hash TEXT NOT NULL,
-    display_name TEXT NOT NULL
-  );
+      CREATE TABLE IF NOT EXISTS shop_settings (
+        key TEXT PRIMARY KEY,
+        value TEXT NOT NULL
+      );
 
-  CREATE TABLE IF NOT EXISTS media_assets (
-    id TEXT PRIMARY KEY,
-    filename TEXT NOT NULL,
-    mime_type TEXT NOT NULL,
-    data_base64 TEXT NOT NULL,
-    created_at TEXT NOT NULL DEFAULT (datetime('now'))
-  );
-`);
+      CREATE TABLE IF NOT EXISTS admin_users (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        username TEXT NOT NULL UNIQUE,
+        password_hash TEXT NOT NULL,
+        display_name TEXT NOT NULL
+      );
+
+      CREATE TABLE IF NOT EXISTS media_assets (
+        id TEXT PRIMARY KEY,
+        filename TEXT NOT NULL,
+        mime_type TEXT NOT NULL,
+        data_base64 TEXT NOT NULL,
+        created_at TEXT NOT NULL DEFAULT (datetime('now'))
+      );
+    `);
+    return { db: instance, available: true };
+  } catch (err) {
+    console.warn('Local SQLite unavailable in this runtime (using Supabase):', (err as Error).message);
+    const noopStmt: SqliteStatementLike = {
+      all: () => [],
+      get: () => undefined,
+      run: () => ({ changes: 0, lastInsertRowid: 0 }),
+    };
+    return {
+      db: {
+        exec: () => {},
+        prepare: () => noopStmt,
+      },
+      available: false,
+    };
+  }
+}
+
+const sqliteInit = createSqliteInstance();
+export const db: SqliteDbLike = sqliteInit.db;
+export const isSqliteAvailable: boolean = sqliteInit.available;
 
 function formatLocalDate(offsetDays: number): string {
   const d = new Date();
@@ -203,6 +245,8 @@ export const HAZEM_GALLERY_PHOTOS = [
 ] as const;
 
 export function initializeDatabaseSeed(): void {
+  if (!isSqliteAvailable) return;
+
   // One-time migration if previous placeholder shop 'Maison Valmont' was seeded
   const existingShopName = db
     .prepare("SELECT value FROM shop_settings WHERE key = 'shop_name'")
