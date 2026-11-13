@@ -1,5 +1,4 @@
 import { useState } from 'react';
-import { AnimatePresence, motion } from 'motion/react';
 import { Star, X, ZoomIn } from 'lucide-react';
 import type { GalleryImage } from '../types/barbershop';
 import { BarberImage } from './BarberImage';
@@ -7,8 +6,6 @@ import { BarberImage } from './BarberImage';
 interface GalleryAndReviewsSectionProps {
   gallery: GalleryImage[];
 }
-
-const EASE_LUXE = [0.22, 1, 0.36, 1] as const;
 
 const REVIEWS = [
   {
@@ -37,36 +34,23 @@ export function GalleryAndReviewsSection({ gallery }: GalleryAndReviewsSectionPr
   return (
     <section id="galerie" className="py-20 lg:py-28 bg-[#000000] border-b border-[#8C8889]/20">
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-        {/* Simple Gallery Header */}
-        <motion.div
-          initial={{ opacity: 0, y: 14 }}
-          whileInView={{ opacity: 1, y: 0 }}
-          viewport={{ once: true, amount: 0.2 }}
-          transition={{ duration: 0.55, ease: EASE_LUXE }}
-          className="mb-12"
-        >
+        <div className="mb-12">
           <p className="text-xs font-medium tracking-[0.2em] uppercase text-[#8C8889] mb-3">
             Savoir-faire en images
           </p>
           <h2 className="font-[family-name:var(--font-display)] text-3xl sm:text-4xl font-semibold text-[#FFFFFF] tracking-tight">
             Galerie <span className="italic font-medium text-[#CFCFD3]">du salon</span>
           </h2>
-        </motion.div>
+        </div>
 
-        {/* Simple Clean Photo Grid */}
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-5 mb-24">
-          {gallery.map((item, idx) => (
-            <motion.button
+          {gallery.map((item) => (
+            <button
               key={item.id}
-              initial={{ opacity: 0, y: 14 }}
-              whileInView={{ opacity: 1, y: 0 }}
-              viewport={{ once: true, amount: 0.15 }}
-              transition={{ duration: 0.45, delay: idx * 0.06, ease: EASE_LUXE }}
-              whileHover={{ y: -3 }}
               type="button"
               onClick={() => setLightboxImage(item)}
               aria-label={item.title}
-              className="group relative aspect-[4/5] w-full overflow-hidden rounded-lg bg-[#0D0D0F] border border-[#8C8889]/25 hover:border-[#CFCFD3]/70 text-left cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#CFCFD3] transition-colors duration-200"
+              className="group relative aspect-[4/5] w-full overflow-hidden rounded-lg bg-[#0D0D0F] border border-[#8C8889]/25 hover:border-[#CFCFD3]/70 hover:-translate-y-0.5 text-left cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#CFCFD3] transition-all duration-200"
             >
               <BarberImage
                 src={item.image_url}
@@ -78,19 +62,13 @@ export function GalleryAndReviewsSection({ gallery }: GalleryAndReviewsSectionPr
               <div className="absolute bottom-3 right-3 opacity-0 group-hover:opacity-100 transition-opacity duration-200 w-8 h-8 rounded-full bg-[#000000]/80 border border-[#CFCFD3]/30 flex items-center justify-center">
                 <ZoomIn className="w-4 h-4 text-[#FFFFFF]" />
               </div>
-            </motion.button>
+            </button>
           ))}
         </div>
 
         {/* Testimonials */}
         <div className="pt-16 border-t border-[#8C8889]/20">
-          <motion.div
-            initial={{ opacity: 0, y: 14 }}
-            whileInView={{ opacity: 1, y: 0 }}
-            viewport={{ once: true, amount: 0.2 }}
-            transition={{ duration: 0.55, ease: EASE_LUXE }}
-            className="flex flex-col md:flex-row md:items-end justify-between gap-4 mb-10"
-          >
+          <div className="flex flex-col md:flex-row md:items-end justify-between gap-4 mb-10">
             <div>
               <p className="text-xs font-medium tracking-[0.2em] uppercase text-[#8C8889] mb-3">
                 Avis clients Google · 5,0 / 5
@@ -102,18 +80,13 @@ export function GalleryAndReviewsSection({ gallery }: GalleryAndReviewsSectionPr
             <p className="text-sm text-[#8C8889] tabular-nums">
               Note globale 5,0 sur 15 avis vérifiés
             </p>
-          </motion.div>
+          </div>
 
           <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-            {REVIEWS.map((review, idx) => (
-              <motion.blockquote
+            {REVIEWS.map((review) => (
+              <blockquote
                 key={review.name}
-                initial={{ opacity: 0, y: 16 }}
-                whileInView={{ opacity: 1, y: 0 }}
-                viewport={{ once: true, amount: 0.15 }}
-                transition={{ duration: 0.5, delay: idx * 0.08, ease: EASE_LUXE }}
-                whileHover={{ y: -3 }}
-                className="p-6 bg-[#0D0D0F] border border-[#8C8889]/25 hover:border-[#CFCFD3]/55 rounded-lg flex flex-col justify-between transition-colors duration-200"
+                className="p-6 bg-[#0D0D0F] border border-[#8C8889]/25 hover:border-[#CFCFD3]/55 hover:-translate-y-0.5 rounded-lg flex flex-col justify-between transition-all duration-200"
               >
                 <div>
                   <div className="flex items-center justify-between gap-2 mb-4">
@@ -133,60 +106,50 @@ export function GalleryAndReviewsSection({ gallery }: GalleryAndReviewsSectionPr
                   <p className="text-sm font-semibold text-[#FFFFFF]">{review.name}</p>
                   <p className="text-xs text-[#8C8889] mt-0.5">{review.context}</p>
                 </footer>
-              </motion.blockquote>
+              </blockquote>
             ))}
           </div>
         </div>
       </div>
 
       {/* Lightbox Modal */}
-      <AnimatePresence>
-        {lightboxImage && (
-          <motion.div
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
-            transition={{ duration: 0.22 }}
-            className="fixed inset-0 z-50 bg-[#000000]/90 backdrop-blur-sm flex items-center justify-center p-4"
-            onClick={() => setLightboxImage(null)}
-            role="dialog"
-            aria-modal="true"
-            aria-label={lightboxImage.title}
+      {lightboxImage && (
+        <div
+          className="fixed inset-0 z-50 bg-[#000000]/90 backdrop-blur-sm flex items-center justify-center p-4"
+          onClick={() => setLightboxImage(null)}
+          role="dialog"
+          aria-modal="true"
+          aria-label={lightboxImage.title}
+        >
+          <div
+            className="relative max-w-4xl w-full bg-[#0D0D0F] border border-[#8C8889]/35 rounded-lg overflow-hidden"
+            onClick={(e) => e.stopPropagation()}
           >
-            <motion.div
-              initial={{ opacity: 0, scale: 0.96, y: 12 }}
-              animate={{ opacity: 1, scale: 1, y: 0 }}
-              exit={{ opacity: 0, scale: 0.96, y: 12 }}
-              transition={{ duration: 0.28, ease: EASE_LUXE }}
-              className="relative max-w-4xl w-full bg-[#0D0D0F] border border-[#8C8889]/35 rounded-lg overflow-hidden"
-              onClick={(e) => e.stopPropagation()}
+            <button
+              type="button"
+              onClick={() => setLightboxImage(null)}
+              aria-label="Fermer l’aperçu"
+              className="absolute top-4 right-4 z-10 w-10 h-10 flex items-center justify-center rounded-full bg-[#000000]/80 text-[#FFFFFF] hover:text-[#CFCFD3] border border-[#8C8889]/30 transition-colors cursor-pointer"
             >
-              <button
-                type="button"
-                onClick={() => setLightboxImage(null)}
-                aria-label="Fermer l’aperçu"
-                className="absolute top-4 right-4 z-10 w-10 h-10 flex items-center justify-center rounded-full bg-[#000000]/80 text-[#FFFFFF] hover:text-[#CFCFD3] border border-[#8C8889]/30 transition-colors cursor-pointer"
-              >
-                <X className="w-5 h-5" />
-              </button>
-              <div className="aspect-[4/3] max-h-[75vh] w-full bg-[#000000]">
-                <BarberImage
-                  src={lightboxImage.image_url}
-                  alt={lightboxImage.title}
-                  title={lightboxImage.title}
-                  className="w-full h-full object-contain"
-                />
+              <X className="w-5 h-5" />
+            </button>
+            <div className="aspect-[4/3] max-h-[75vh] w-full bg-[#000000]">
+              <BarberImage
+                src={lightboxImage.image_url}
+                alt={lightboxImage.title}
+                title={lightboxImage.title}
+                className="w-full h-full object-contain"
+              />
+            </div>
+            <div className="p-5 border-t border-[#8C8889]/25 flex items-center justify-between">
+              <div>
+                <p className="text-xs text-[#8C8889]">{lightboxImage.category}</p>
+                <p className="text-base font-medium text-[#FFFFFF]">{lightboxImage.title}</p>
               </div>
-              <div className="p-5 border-t border-[#8C8889]/25 flex items-center justify-between">
-                <div>
-                  <p className="text-xs text-[#8C8889]">{lightboxImage.category}</p>
-                  <p className="text-base font-medium text-[#FFFFFF]">{lightboxImage.title}</p>
-                </div>
-              </div>
-            </motion.div>
-          </motion.div>
-        )}
-      </AnimatePresence>
+            </div>
+          </div>
+        </div>
+      )}
     </section>
   );
 }

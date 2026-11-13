@@ -1,4 +1,3 @@
-import { motion } from 'motion/react';
 import { Clock, ArrowUpRight } from 'lucide-react';
 import type { ServiceItem } from '../types/barbershop';
 import { formatPriceFr } from '../lib/api';
@@ -9,8 +8,6 @@ interface ServicesSectionProps {
   onSelectServiceForBooking: (service: ServiceItem) => void;
 }
 
-const EASE_LUXE = [0.22, 1, 0.36, 1] as const;
-
 export function ServicesSection({
   services,
   onSelectServiceForBooking,
@@ -18,13 +15,7 @@ export function ServicesSection({
   return (
     <section id="services" className="py-20 lg:py-28 bg-[#000000] border-b border-[#8C8889]/20">
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-        <motion.div
-          initial={{ opacity: 0, y: 16 }}
-          whileInView={{ opacity: 1, y: 0 }}
-          viewport={{ once: true, amount: 0.2 }}
-          transition={{ duration: 0.55, ease: EASE_LUXE }}
-          className="flex flex-col md:flex-row md:items-end justify-between gap-6 mb-14"
-        >
+        <div className="flex flex-col md:flex-row md:items-end justify-between gap-6 mb-14">
           <div className="max-w-2xl">
             <p className="text-xs font-medium tracking-[0.2em] uppercase text-[#8C8889] mb-3">
               La Carte des Soins
@@ -37,18 +28,13 @@ export function ServicesSection({
             Chaque rendez-vous débute par une consultation attentive afin d’harmoniser
             la coupe et la barbe avec votre style naturel.
           </p>
-        </motion.div>
+        </div>
 
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 lg:gap-8">
-          {services.map((service, index) => (
-            <motion.article
+          {services.map((service) => (
+            <article
               key={service.id}
-              initial={{ opacity: 0, y: 18 }}
-              whileInView={{ opacity: 1, y: 0 }}
-              viewport={{ once: true, amount: 0.15 }}
-              transition={{ duration: 0.5, delay: (index % 3) * 0.06, ease: EASE_LUXE }}
-              whileHover={{ y: -4 }}
-              className="group flex flex-col bg-[#0D0D0F] border border-[#8C8889]/25 hover:border-[#CFCFD3]/70 rounded-lg overflow-hidden transition-colors duration-300"
+              className="group flex flex-col bg-[#0D0D0F] border border-[#8C8889]/25 hover:border-[#CFCFD3]/70 hover:-translate-y-1 rounded-lg overflow-hidden transition-all duration-300"
             >
               <div className="aspect-[4/3] w-full overflow-hidden bg-[#070708] relative">
                 <BarberImage
@@ -87,7 +73,7 @@ export function ServicesSection({
                   <ArrowUpRight className="w-4 h-4 transition-transform duration-200 group-hover:translate-x-0.5 group-hover:-translate-y-0.5" />
                 </button>
               </div>
-            </motion.article>
+            </article>
           ))}
         </div>
       </div>

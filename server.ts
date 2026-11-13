@@ -15,6 +15,15 @@ async function startServer() {
   const PORT = Number(process.env.PORT) || 3000;
 
   app.use(
+    '/assets/optimized',
+    express.static(path.resolve(__dirname, 'public/assets/optimized'), {
+      maxAge: '30d',
+      immutable: true,
+      etag: true,
+    })
+  );
+
+  app.use(
     '/assets/aistudio',
     express.static(path.resolve(__dirname, 'public/assets/aistudio'), {
       maxAge: '7d',

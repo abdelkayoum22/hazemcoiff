@@ -1,13 +1,17 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { AnimatePresence, motion } from 'motion/react';
 import {
+  AlertCircle,
   ArrowLeft,
   Calendar,
+  CalendarDays,
   Check,
+  CheckCircle2,
   Clock,
   Edit3,
   Image as ImageIcon,
   LayoutDashboard,
+  List,
   Lock,
   LogOut,
   Plus,
@@ -16,6 +20,7 @@ import {
   Settings,
   Trash2,
   Upload,
+  UserPlus,
   X,
 } from 'lucide-react';
 import type {
@@ -62,6 +67,8 @@ import {
 } from '../lib/api';
 import { PRESET_IMAGE_OPTIONS } from '../lib/images';
 import { BarberImage } from './BarberImage';
+import { ManualAppointmentModal } from './admin/ManualAppointmentModal';
+import { AppointmentsCalendarView } from './admin/AppointmentsCalendarView';
 
 interface AdminDashboardProps {
   initialHours: BusinessHour[];
@@ -110,9 +117,21 @@ export function AdminDashboard({
 
   const [overview, setOverview] = useState<AdminOverviewStats | null>(null);
   const [appointments, setAppointments] = useState<AppointmentRecord[]>([]);
+  const [appointmentsView, setAppointmentsView] = useState<'calendar' | 'list'>('calendar');
+  const [selectedCalendarDate, setSelectedCalendarDate] = useState<string>(() => {
+    const d = new Date();
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(
+      d.getDate()
+    ).padStart(2, '0')}`;
+  });
   const [searchQuery, setSearchQuery] = useState('');
   const [dateFilter, setDateFilter] = useState('');
+  const [timeFilter, setTimeFilter] = useState('');
   const [statusFilter, setStatusFilter] = useState('');
+
+  const [manualModalOpen, setManualModalOpen] = useState(false);
+  const [manualPrefill, setManualPrefill] = useState<{ date?: string; time?: string }>({});
+
   const [editingAppointment, setEditingAppointment] = useState<{
     id: number;
     reference: string;
@@ -199,11 +218,7 @@ export function AdminDashboard({
     try {
       const [ov, appts, svcs, dOff, rules, gal] = await Promise.all([
         fetchAdminOverview(token),
-        fetchAdminAppointments(token, {
-          search: searchQuery,
-          date: dateFilter,
-          status: statusFilter,
-        }),
+        fetchAdminAppointments(token, {}),
         fetchAdminServices(token),
         fetchDaysOff(token),
         fetchSlotRules(token),
@@ -218,11 +233,104 @@ export function AdminDashboard({
     } catch (err) {
       console.error('Failed loading admin data:', err);
     }
-  }, [token, adminUser, searchQuery, dateFilter, statusFilter]);
+  }, [token, adminUser]);
 
   useEffect(() => {
     loadAllAdminData();
   }, [loadAllAdminData]);
+
+  useEffect(() => {
+    const handleSync = () => {
+      loadAllAdminData();
+    };
+    window.addEventListener('hazem:sync', handleSync);
+    return () => window.removeEventListener('hazem:sync', handleSync);
+  }, [loadAllAdminData]);
+
+  const toMinutes = (hhmm: string): number => {
+    const [h, m] = hhmm.split(':').map(Number);
+    if (Number.isNaN(h) || Number.isNaN(m)) return -1;
+    return h * 60 + m;
+  };
+
+  const matchesTimeOverlap = (appt: AppointmentRecord, qTime: string): boolean => {
+    if (!qTime) return true;
+    const qMin = toMinutes(qTime);
+    const sMin = toMinutes(appt.start_time);
+    const eMin = toMinutes(appt.end_time);
+    if (qMin < 0 || sMin < 0 || eMin < 0) {
+      return appt.start_time.startsWith(qTime);
+    }
+    return qMin >= sMin && qMin < eMin;
+  };
+
+  const calendarAppointments = useMemo(() => {
+    const q = searchQuery.trim().toLowerCase();
+    return appointments.filter((appt) => {
+      if (statusFilter && appt.status !== statusFilter) return false;
+      if (q) {
+        const fullName = `${appt.first_name} ${appt.last_name}`.toLowerCase();
+        const hit =
+          appt.first_name.toLowerCase().includes(q) ||
+          appt.last_name.toLowerCase().includes(q) ||
+          fullName.includes(q) ||
+          appt.phone.toLowerCase().includes(q) ||
+          appt.reference.toLowerCase().includes(q);
+        if (!hit) return false;
+      }
+      return true;
+    });
+  }, [appointments, searchQuery, statusFilter]);
+
+  const filteredAppointments = useMemo(() => {
+    return calendarAppointments.filter((appt) => {
+      if (dateFilter && appt.appointment_date !== dateFilter) return false;
+      if (timeFilter && !matchesTimeOverlap(appt, timeFilter)) return false;
+      return true;
+    });
+  }, [calendarAppointments, dateFilter, timeFilter]);
+
+  const timeCheckDate = dateFilter || selectedCalendarDate;
+
+  const timeCheckStatus = useMemo(() => {
+    if (!timeFilter) return null;
+    const activeOnDate = appointments.filter(
+      (a) => a.appointment_date === timeCheckDate && a.status !== 'cancelled'
+    );
+    const blockingAppt = activeOnDate.find((a) => matchesTimeOverlap(a, timeFilter)) || null;
+    const dayOffEntry = daysOff.find((d) => d.date === timeCheckDate) || null;
+    const [y, m, d] = timeCheckDate.split('-').map(Number);
+    const weekday = new Date(y, m - 1, d).getDay();
+    const dayHours = hours.find((h) => h.day_of_week === weekday) || null;
+    const qMin = toMinutes(timeFilter);
+    const outsideHours =
+      !dayHours ||
+      dayHours.is_open === 0 ||
+      qMin < toMinutes(dayHours.open_time) ||
+      qMin >= toMinutes(dayHours.close_time);
+
+    const allDatesWithTime = appointments.filter(
+      (a) => a.status !== 'cancelled' && matchesTimeOverlap(a, timeFilter)
+    );
+
+    return {
+      date: timeCheckDate,
+      time: timeFilter,
+      blockingAppt,
+      dayOffEntry,
+      outsideHours,
+      dayHours,
+      allDatesWithTimeCount: allDatesWithTime.length,
+    };
+  }, [appointments, daysOff, hours, timeCheckDate, timeFilter]);
+
+  const openManualModal = (prefillDate?: string, prefillTime?: string) => {
+    setManualPrefill({
+      date: prefillDate || selectedCalendarDate,
+      time: prefillTime || (timeFilter || '14:00'),
+    });
+    setManualModalOpen(true);
+  };
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -690,13 +798,23 @@ export function AdminDashboard({
                       Activité du salon au {overview ? formatShortDateFr(overview.todayDate) : 'jour'}
                     </p>
                   </div>
-                  <button
-                    type="button"
-                    onClick={() => setActiveTab('appointments')}
-                    className="px-4 py-2 text-xs font-semibold text-[#000000] bg-[#FFFFFF] hover:bg-[#CFCFD3] rounded transition-colors cursor-pointer"
-                  >
-                    Gérer les rendez-vous
-                  </button>
+                  <div className="flex flex-wrap items-center gap-2.5">
+                    <button
+                      type="button"
+                      onClick={() => openManualModal()}
+                      className="inline-flex items-center gap-2 px-4 py-2 text-xs font-semibold text-[#000000] bg-[#FFFFFF] hover:bg-[#CFCFD3] rounded transition-colors cursor-pointer"
+                    >
+                      <UserPlus className="w-3.5 h-3.5" />
+                      <span>Nouveau client / RDV</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setActiveTab('appointments')}
+                      className="px-4 py-2 text-xs font-medium text-[#FFFFFF] bg-[#161619] hover:border-[#FFFFFF] border border-[#8C8889]/30 rounded transition-colors cursor-pointer"
+                    >
+                      Voir le calendrier
+                    </button>
+                  </div>
                 </div>
 
                 <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
@@ -788,38 +906,94 @@ export function AdminDashboard({
             {/* TAB 2: APPOINTMENTS MANAGEMENT */}
             {activeTab === 'appointments' && (
               <div className="space-y-6">
-                <div>
-                  <h1 className="font-[family-name:var(--font-display)] text-2xl sm:text-3xl font-semibold text-[#FFFFFF]">
-                    Gestion des rendez-vous
-                  </h1>
-                  <p className="text-sm text-[#8C8889] mt-1">
-                    Recherchez par nom ou téléphone, filtrez par date et mettez à jour les statuts.
-                  </p>
+                <div className="flex flex-wrap items-center justify-between gap-4">
+                  <div>
+                    <h1 className="font-[family-name:var(--font-display)] text-2xl sm:text-3xl font-semibold text-[#FFFFFF]">
+                      Gestion des rendez-vous
+                    </h1>
+                    <p className="text-sm text-[#8C8889] mt-1">
+                      Consultez le calendrier, vérifiez si une heure est prise ou ajoutez un client manuellement.
+                    </p>
+                  </div>
+
+                  <div className="flex flex-wrap items-center gap-2.5">
+                    <div className="inline-flex rounded-lg bg-[#0D0D0F] border border-[#8C8889]/25 p-1">
+                      <button
+                        type="button"
+                        onClick={() => setAppointmentsView('calendar')}
+                        className={`inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-md transition-colors cursor-pointer ${
+                          appointmentsView === 'calendar'
+                            ? 'bg-[#FFFFFF] text-[#000000] font-semibold'
+                            : 'text-[#8C8889] hover:text-[#FFFFFF]'
+                        }`}
+                      >
+                        <CalendarDays className="w-3.5 h-3.5" />
+                        <span>Calendrier</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setAppointmentsView('list')}
+                        className={`inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-md transition-colors cursor-pointer ${
+                          appointmentsView === 'list'
+                            ? 'bg-[#FFFFFF] text-[#000000] font-semibold'
+                            : 'text-[#8C8889] hover:text-[#FFFFFF]'
+                        }`}
+                      >
+                        <List className="w-3.5 h-3.5" />
+                        <span>Liste</span>
+                      </button>
+                    </div>
+
+                    <button
+                      type="button"
+                      onClick={() => openManualModal()}
+                      className="inline-flex items-center gap-2 px-4 py-2.5 text-xs font-semibold text-[#000000] bg-[#FFFFFF] hover:bg-[#CFCFD3] rounded-lg transition-colors cursor-pointer"
+                    >
+                      <Plus className="w-4 h-4" />
+                      <span>Ajouter un client</span>
+                    </button>
+                  </div>
                 </div>
 
-                <div className="grid grid-cols-1 sm:grid-cols-4 gap-3 bg-[#0D0D0F] border border-[#8C8889]/25 rounded-lg p-4">
-                  <div className="sm:col-span-2 relative">
+                {/* Search + Date + Time Check + Status Filters */}
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-12 gap-3 bg-[#0D0D0F] border border-[#8C8889]/25 rounded-lg p-4">
+                  <div className="lg:col-span-4 relative">
                     <Search className="w-4 h-4 text-[#8C8889] absolute left-3.5 top-1/2 -translate-y-1/2" />
                     <input
                       type="text"
                       value={searchQuery}
                       onChange={(e) => setSearchQuery(e.target.value)}
-                      placeholder="Rechercher nom, téléphone, référence..."
+                      placeholder="Rechercher nom, téléphone, réf..."
                       className="w-full pl-10 pr-4 py-2.5 bg-[#000000] border border-[#8C8889]/30 focus:border-[#FFFFFF] rounded text-sm text-[#FFFFFF] focus:outline-none"
                     />
                   </div>
 
-                  <div>
+                  <div className="lg:col-span-3">
                     <input
                       type="date"
                       value={dateFilter}
-                      onChange={(e) => setDateFilter(e.target.value)}
+                      onChange={(e) => {
+                        setDateFilter(e.target.value);
+                        if (e.target.value) setSelectedCalendarDate(e.target.value);
+                      }}
                       aria-label="Filtrer par date"
                       className="w-full px-3 py-2.5 bg-[#000000] border border-[#8C8889]/30 focus:border-[#FFFFFF] rounded text-sm text-[#FFFFFF] focus:outline-none"
                     />
                   </div>
 
-                  <div className="flex gap-2">
+                  <div className="lg:col-span-2 relative">
+                    <Clock className="w-4 h-4 text-[#8C8889] absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
+                    <input
+                      type="time"
+                      value={timeFilter}
+                      onChange={(e) => setTimeFilter(e.target.value)}
+                      aria-label="Vérifier ou rechercher une heure"
+                      title="Vérifier si une heure est déjà prise"
+                      className="w-full pl-9 pr-2 py-2.5 bg-[#000000] border border-[#8C8889]/30 focus:border-[#FFFFFF] rounded text-sm font-mono text-[#FFFFFF] focus:outline-none"
+                    />
+                  </div>
+
+                  <div className="lg:col-span-3 flex gap-2">
                     <select
                       value={statusFilter}
                       onChange={(e) => setStatusFilter(e.target.value)}
@@ -832,12 +1006,13 @@ export function AdminDashboard({
                       <option value="completed">Terminé</option>
                       <option value="cancelled">Annulé</option>
                     </select>
-                    {(searchQuery || dateFilter || statusFilter) && (
+                    {(searchQuery || dateFilter || timeFilter || statusFilter) && (
                       <button
                         type="button"
                         onClick={() => {
                           setSearchQuery('');
                           setDateFilter('');
+                          setTimeFilter('');
                           setStatusFilter('');
                         }}
                         className="px-3 py-2.5 bg-[#161619] border border-[#8C8889]/25 rounded text-xs text-[#CFCFD3] hover:text-[#FFFFFF] cursor-pointer"
@@ -848,141 +1023,291 @@ export function AdminDashboard({
                   </div>
                 </div>
 
-                <div className="bg-[#0D0D0F] border border-[#8C8889]/25 rounded-lg overflow-x-auto">
-                  {appointments.length === 0 ? (
-                    <div className="p-10 text-center text-sm text-[#8C8889]">
-                      Aucun rendez-vous ne correspond à votre recherche.
+                {/* Instant Time Availability Result Banner */}
+                {timeCheckStatus && (
+                  <div
+                    className={`p-4 rounded-xl border flex flex-wrap items-center justify-between gap-4 ${
+                      timeCheckStatus.blockingAppt
+                        ? 'bg-red-950/35 border-red-500/40 text-red-100'
+                        : timeCheckStatus.dayOffEntry || timeCheckStatus.outsideHours
+                          ? 'bg-amber-950/35 border-amber-500/40 text-amber-100'
+                          : 'bg-emerald-950/35 border-emerald-500/40 text-emerald-100'
+                    }`}
+                  >
+                    <div className="flex items-start gap-3">
+                      {timeCheckStatus.blockingAppt ? (
+                        <AlertCircle className="w-5 h-5 text-red-300 shrink-0 mt-0.5" />
+                      ) : timeCheckStatus.dayOffEntry || timeCheckStatus.outsideHours ? (
+                        <AlertCircle className="w-5 h-5 text-amber-300 shrink-0 mt-0.5" />
+                      ) : (
+                        <CheckCircle2 className="w-5 h-5 text-emerald-300 shrink-0 mt-0.5" />
+                      )}
+                      <div>
+                        {timeCheckStatus.blockingAppt ? (
+                          <>
+                            <p className="text-sm font-semibold">
+                              Heure déjà prise à {timeCheckStatus.time} le{' '}
+                              {formatShortDateFr(timeCheckStatus.date)}
+                            </p>
+                            <p className="text-xs opacity-90 mt-0.5">
+                              Client :{' '}
+                              <span className="font-semibold">
+                                {timeCheckStatus.blockingAppt.first_name}{' '}
+                                {timeCheckStatus.blockingAppt.last_name}
+                              </span>{' '}
+                              ({timeCheckStatus.blockingAppt.phone}) ·{' '}
+                              {timeCheckStatus.blockingAppt.service_name} de{' '}
+                              <span className="font-mono">
+                                {timeCheckStatus.blockingAppt.start_time} à{' '}
+                                {timeCheckStatus.blockingAppt.end_time}
+                              </span>
+                            </p>
+                          </>
+                        ) : timeCheckStatus.dayOffEntry ? (
+                          <>
+                            <p className="text-sm font-semibold">
+                              Jour de fermeture le {formatShortDateFr(timeCheckStatus.date)}
+                            </p>
+                            <p className="text-xs opacity-90 mt-0.5">
+                              Motif : {timeCheckStatus.dayOffEntry.reason}. Aucun client à{' '}
+                              {timeCheckStatus.time}.
+                            </p>
+                          </>
+                        ) : timeCheckStatus.outsideHours ? (
+                          <>
+                            <p className="text-sm font-semibold">
+                              Aucun client à {timeCheckStatus.time} le{' '}
+                              {formatShortDateFr(timeCheckStatus.date)} (hors horaires d’ouverture)
+                            </p>
+                            <p className="text-xs opacity-90 mt-0.5">
+                              {timeCheckStatus.dayHours && timeCheckStatus.dayHours.is_open === 1
+                                ? `Ouvert de ${timeCheckStatus.dayHours.open_time} à ${timeCheckStatus.dayHours.close_time}.`
+                                : 'Salon habituellement fermé ce jour-là.'}
+                            </p>
+                          </>
+                        ) : (
+                          <>
+                            <p className="text-sm font-semibold">
+                              Créneau libre à {timeCheckStatus.time} le{' '}
+                              {formatShortDateFr(timeCheckStatus.date)}
+                            </p>
+                            <p className="text-xs opacity-90 mt-0.5">
+                              Aucun rendez-vous prévu à cette heure.{' '}
+                              {timeCheckStatus.allDatesWithTimeCount > 0 &&
+                                `(${timeCheckStatus.allDatesWithTimeCount} autre(s) RDV à ${timeCheckStatus.time} sur d'autres dates)`}
+                            </p>
+                          </>
+                        )}
+                      </div>
                     </div>
-                  ) : (
-                    <table className="w-full text-left border-collapse min-w-[780px]">
-                      <thead>
-                        <tr className="border-b border-[#8C8889]/20 text-xs text-[#8C8889] bg-[#08080A]">
-                          <th className="py-3.5 px-4 font-medium">Référence</th>
-                          <th className="py-3.5 px-4 font-medium">Client</th>
-                          <th className="py-3.5 px-4 font-medium">Prestation</th>
-                          <th className="py-3.5 px-4 font-medium">Date & Heure</th>
-                          <th className="py-3.5 px-4 font-medium text-right">Tarif</th>
-                          <th className="py-3.5 px-4 font-medium">Statut</th>
-                          <th className="py-3.5 px-4 font-medium text-right">Actions</th>
-                        </tr>
-                      </thead>
-                      <tbody className="divide-y divide-[#8C8889]/15 text-sm">
-                        {appointments.map((appt) => (
-                          <tr key={appt.id} className="hover:bg-white/[0.02] transition-colors">
-                            <td className="py-3.5 px-4 font-[family-name:var(--font-mono)] text-xs text-[#CFCFD3] tabular-nums">
-                              {appt.reference}
-                            </td>
-                            <td className="py-3.5 px-4">
-                              <p className="font-medium text-[#FFFFFF]">
-                                {appt.first_name} {appt.last_name}
-                              </p>
-                              <p className="font-[family-name:var(--font-mono)] text-xs text-[#8C8889] tabular-nums">
-                                {appt.phone}
-                              </p>
-                            </td>
-                            <td className="py-3.5 px-4 text-[#CFCFD3]">
-                              {appt.service_name}
-                              <span className="block text-xs text-[#8C8889] tabular-nums">
-                                {appt.duration_minutes} min
-                              </span>
-                            </td>
-                            <td className="py-3.5 px-4 tabular-nums">
-                              <span className="block text-[#FFFFFF]">
-                                {formatShortDateFr(appt.appointment_date)}
-                              </span>
-                              <span className="font-[family-name:var(--font-mono)] text-xs text-[#8C8889]">
-                                {appt.start_time} – {appt.end_time}
-                              </span>
-                            </td>
-                            <td className="py-3.5 px-4 text-right font-[family-name:var(--font-mono)] text-[#FFFFFF] tabular-nums">
-                              {formatPriceFr(appt.price)}
-                            </td>
-                            <td className="py-3.5 px-4">
-                              <span
-                                className={`inline-block px-2.5 py-1 text-xs font-medium border rounded whitespace-nowrap ${
-                                  STATUS_STYLES[appt.status]
-                                }`}
-                              >
-                                {STATUS_LABELS[appt.status]}
-                              </span>
-                            </td>
-                            <td className="py-3.5 px-4 text-right">
-                              <div className="inline-flex items-center gap-1.5 flex-wrap justify-end">
-                                <button
-                                  type="button"
-                                  onClick={() =>
-                                    setEditingAppointment({
-                                      id: appt.id,
-                                      reference: appt.reference,
-                                      serviceId: appt.service_id,
-                                      date: appt.appointment_date,
-                                      startTime: appt.start_time,
-                                      firstName: appt.first_name,
-                                      lastName: appt.last_name,
-                                      phone: appt.phone,
-                                      status: appt.status,
-                                      notes: appt.notes || '',
-                                    })
-                                  }
-                                  className="inline-flex items-center gap-1 px-2.5 py-1 text-xs bg-[#161619] hover:border-[#FFFFFF] text-[#FFFFFF] border border-[#8C8889]/30 rounded cursor-pointer transition-colors"
+
+                    <div className="flex items-center gap-2">
+                      {timeCheckStatus.blockingAppt ? (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const appt = timeCheckStatus.blockingAppt!;
+                            setEditingAppointment({
+                              id: appt.id,
+                              reference: appt.reference,
+                              serviceId: appt.service_id,
+                              date: appt.appointment_date,
+                              startTime: appt.start_time,
+                              firstName: appt.first_name,
+                              lastName: appt.last_name,
+                              phone: appt.phone,
+                              status: appt.status,
+                              notes: appt.notes || '',
+                            });
+                          }}
+                          className="px-3.5 py-1.5 text-xs font-semibold bg-[#FFFFFF] text-[#000000] rounded cursor-pointer hover:bg-[#CFCFD3]"
+                        >
+                          Modifier ce RDV
+                        </button>
+                      ) : (
+                        <button
+                          type="button"
+                          onClick={() =>
+                            openManualModal(timeCheckStatus.date, timeCheckStatus.time)
+                          }
+                          className="inline-flex items-center gap-1.5 px-3.5 py-1.5 text-xs font-semibold bg-[#FFFFFF] text-[#000000] rounded cursor-pointer hover:bg-[#CFCFD3]"
+                        >
+                          <Plus className="w-3.5 h-3.5" />
+                          <span>Réserver {timeCheckStatus.time}</span>
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                )}
+
+                {appointmentsView === 'calendar' ? (
+                  <AppointmentsCalendarView
+                    appointments={calendarAppointments}
+                    daysOff={daysOff}
+                    hours={hours}
+                    selectedDate={selectedCalendarDate}
+                    onSelectDate={(d) => {
+                      setSelectedCalendarDate(d);
+                      if (dateFilter) setDateFilter(d);
+                    }}
+                    timeCheckQuery={timeFilter}
+                    onAddAtDateTime={(d, t) => openManualModal(d, t)}
+                    onEdit={(appt) =>
+                      setEditingAppointment({
+                        id: appt.id,
+                        reference: appt.reference,
+                        serviceId: appt.service_id,
+                        date: appt.appointment_date,
+                        startTime: appt.start_time,
+                        firstName: appt.first_name,
+                        lastName: appt.last_name,
+                        phone: appt.phone,
+                        status: appt.status,
+                        notes: appt.notes || '',
+                      })
+                    }
+                    onStatusChange={handleStatusChange}
+                    onDelete={handleDeleteAppointment}
+                    confirmDeleteId={confirmDeleteApptId}
+                    setConfirmDeleteId={setConfirmDeleteApptId}
+                  />
+                ) : (
+                  <div className="bg-[#0D0D0F] border border-[#8C8889]/25 rounded-lg overflow-x-auto">
+                    {filteredAppointments.length === 0 ? (
+                      <div className="p-10 text-center text-sm text-[#8C8889]">
+                        Aucun rendez-vous ne correspond à votre recherche.
+                      </div>
+                    ) : (
+                      <table className="w-full text-left border-collapse min-w-[780px]">
+                        <thead>
+                          <tr className="border-b border-[#8C8889]/20 text-xs text-[#8C8889] bg-[#08080A]">
+                            <th className="py-3.5 px-4 font-medium">Référence</th>
+                            <th className="py-3.5 px-4 font-medium">Client</th>
+                            <th className="py-3.5 px-4 font-medium">Prestation</th>
+                            <th className="py-3.5 px-4 font-medium">Date & Heure</th>
+                            <th className="py-3.5 px-4 font-medium text-right">Tarif</th>
+                            <th className="py-3.5 px-4 font-medium">Statut</th>
+                            <th className="py-3.5 px-4 font-medium text-right">Actions</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-[#8C8889]/15 text-sm">
+                          {filteredAppointments.map((appt) => (
+                            <tr key={appt.id} className="hover:bg-white/[0.02] transition-colors">
+                              <td className="py-3.5 px-4 font-[family-name:var(--font-mono)] text-xs text-[#CFCFD3] tabular-nums">
+                                {appt.reference}
+                              </td>
+                              <td className="py-3.5 px-4">
+                                <p className="font-medium text-[#FFFFFF]">
+                                  {appt.first_name} {appt.last_name}
+                                </p>
+                                <p className="font-[family-name:var(--font-mono)] text-xs text-[#8C8889] tabular-nums">
+                                  {appt.phone}
+                                </p>
+                              </td>
+                              <td className="py-3.5 px-4 text-[#CFCFD3]">
+                                {appt.service_name}
+                                <span className="block text-xs text-[#8C8889] tabular-nums">
+                                  {appt.duration_minutes} min
+                                </span>
+                              </td>
+                              <td className="py-3.5 px-4 tabular-nums">
+                                <span className="block text-[#FFFFFF]">
+                                  {formatShortDateFr(appt.appointment_date)}
+                                </span>
+                                <span className="font-[family-name:var(--font-mono)] text-xs text-[#8C8889]">
+                                  {appt.start_time} – {appt.end_time}
+                                </span>
+                              </td>
+                              <td className="py-3.5 px-4 text-right font-[family-name:var(--font-mono)] text-[#FFFFFF] tabular-nums">
+                                {formatPriceFr(appt.price)}
+                              </td>
+                              <td className="py-3.5 px-4">
+                                <span
+                                  className={`inline-block px-2.5 py-1 text-xs font-medium border rounded whitespace-nowrap ${
+                                    STATUS_STYLES[appt.status]
+                                  }`}
                                 >
-                                  <Edit3 className="w-3 h-3" />
-                                  <span>Modifier</span>
-                                </button>
-                                {appt.status !== 'confirmed' && (
+                                  {STATUS_LABELS[appt.status]}
+                                </span>
+                              </td>
+                              <td className="py-3.5 px-4 text-right">
+                                <div className="inline-flex items-center gap-1.5 flex-wrap justify-end">
                                   <button
                                     type="button"
-                                    onClick={() => handleStatusChange(appt.id, 'confirmed')}
-                                    className="px-2.5 py-1 text-xs bg-emerald-950/60 hover:bg-emerald-900/70 text-emerald-200 border border-emerald-500/30 rounded cursor-pointer"
+                                    onClick={() =>
+                                      setEditingAppointment({
+                                        id: appt.id,
+                                        reference: appt.reference,
+                                        serviceId: appt.service_id,
+                                        date: appt.appointment_date,
+                                        startTime: appt.start_time,
+                                        firstName: appt.first_name,
+                                        lastName: appt.last_name,
+                                        phone: appt.phone,
+                                        status: appt.status,
+                                        notes: appt.notes || '',
+                                      })
+                                    }
+                                    className="inline-flex items-center gap-1 px-2.5 py-1 text-xs bg-[#161619] hover:border-[#FFFFFF] text-[#FFFFFF] border border-[#8C8889]/30 rounded cursor-pointer transition-colors"
                                   >
-                                    Confirmer
+                                    <Edit3 className="w-3 h-3" />
+                                    <span>Modifier</span>
                                   </button>
-                                )}
-                                {appt.status !== 'completed' && (
-                                  <button
-                                    type="button"
-                                    onClick={() => handleStatusChange(appt.id, 'completed')}
-                                    className="px-2.5 py-1 text-xs bg-white/10 hover:bg-white/20 text-[#FFFFFF] border border-[#CFCFD3]/30 rounded cursor-pointer"
-                                  >
-                                    Terminer
-                                  </button>
-                                )}
-                                {confirmDeleteApptId === appt.id ? (
-                                  <div className="inline-flex items-center gap-1">
+                                  {appt.status !== 'confirmed' && (
                                     <button
                                       type="button"
-                                      onClick={() => handleDeleteAppointment(appt.id)}
-                                      className="px-2.5 py-1 text-xs bg-red-600 hover:bg-red-500 text-white rounded cursor-pointer font-semibold"
+                                      onClick={() => handleStatusChange(appt.id, 'confirmed')}
+                                      className="px-2.5 py-1 text-xs bg-emerald-950/60 hover:bg-emerald-900/70 text-emerald-200 border border-emerald-500/30 rounded cursor-pointer"
                                     >
                                       Confirmer
                                     </button>
+                                  )}
+                                  {appt.status !== 'completed' && (
                                     <button
                                       type="button"
-                                      onClick={() => setConfirmDeleteApptId(null)}
-                                      className="px-2 py-1 text-xs text-[#8C8889] hover:text-[#FFFFFF] border border-[#8C8889]/25 rounded cursor-pointer"
+                                      onClick={() => handleStatusChange(appt.id, 'completed')}
+                                      className="px-2.5 py-1 text-xs bg-white/10 hover:bg-white/20 text-[#FFFFFF] border border-[#CFCFD3]/30 rounded cursor-pointer"
                                     >
-                                      Non
+                                      Terminer
                                     </button>
-                                  </div>
-                                ) : (
-                                  <button
-                                    type="button"
-                                    onClick={() => setConfirmDeleteApptId(appt.id)}
-                                    aria-label={`Supprimer ${appt.reference}`}
-                                    className="inline-flex items-center gap-1 px-2.5 py-1 text-xs bg-red-950/60 hover:bg-red-900/70 text-red-200 border border-red-500/30 rounded cursor-pointer"
-                                  >
-                                    <Trash2 className="w-3 h-3" />
-                                    <span>Supprimer</span>
-                                  </button>
-                                )}
-                              </div>
-                            </td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  )}
-                </div>
+                                  )}
+                                  {confirmDeleteApptId === appt.id ? (
+                                    <div className="inline-flex items-center gap-1">
+                                      <button
+                                        type="button"
+                                        onClick={() => handleDeleteAppointment(appt.id)}
+                                        className="px-2.5 py-1 text-xs bg-red-600 hover:bg-red-500 text-white rounded cursor-pointer font-semibold"
+                                      >
+                                        Confirmer
+                                      </button>
+                                      <button
+                                        type="button"
+                                        onClick={() => setConfirmDeleteApptId(null)}
+                                        className="px-2 py-1 text-xs text-[#8C8889] hover:text-[#FFFFFF] border border-[#8C8889]/25 rounded cursor-pointer"
+                                      >
+                                        Non
+                                      </button>
+                                    </div>
+                                  ) : (
+                                    <button
+                                      type="button"
+                                      onClick={() => setConfirmDeleteApptId(appt.id)}
+                                      aria-label={`Supprimer ${appt.reference}`}
+                                      className="inline-flex items-center gap-1 px-2.5 py-1 text-xs bg-red-950/60 hover:bg-red-900/70 text-red-200 border border-red-500/30 rounded cursor-pointer"
+                                    >
+                                      <Trash2 className="w-3 h-3" />
+                                      <span>Supprimer</span>
+                                    </button>
+                                  )}
+                                </div>
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    )}
+                  </div>
+                )}
 
                 {/* Edit Appointment Form Modal */}
                 <AnimatePresence>
@@ -2121,6 +2446,24 @@ export function AdminDashboard({
           </motion.div>
         </AnimatePresence>
       </main>
+
+      <ManualAppointmentModal
+        isOpen={manualModalOpen}
+        token={token}
+        services={services}
+        initialDate={manualPrefill.date}
+        initialTime={manualPrefill.time}
+        onClose={() => setManualModalOpen(false)}
+        onCreated={async (created) => {
+          setSelectedCalendarDate(created.appointment_date);
+          showToast(
+            'success',
+            `Rendez-vous ajouté pour ${created.first_name} ${created.last_name} à ${created.start_time}.`
+          );
+          await loadAllAdminData();
+          onDataMutated();
+        }}
+      />
     </div>
   );
 }

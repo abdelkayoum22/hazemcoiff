@@ -17,6 +17,7 @@ import {
   addSlotRuleAsync,
   authenticateAdmin,
   computeSlotsForDateAsync,
+  createAppointmentAdminAsync,
   createBookingAsync,
   createServiceAsync,
   deleteAppointmentAsync,
@@ -389,6 +390,34 @@ app.get('/api/admin/appointments', requireAdminAuth, async (req, res) => {
   } catch (error) {
     console.error('List appointments error:', error);
     res.status(500).json({ error: 'Erreur lors du chargement des rendez-vous.' });
+  }
+});
+
+app.post('/api/admin/appointments', requireAdminAuth, async (req, res) => {
+  try {
+    await ensureInitialized();
+    const { serviceId, date, startTime, firstName, lastName, phone, status, notes } = req.body || {};
+    const result = await createAppointmentAdminAsync({
+      serviceId: Number(serviceId),
+      date: String(date || ''),
+      startTime: String(startTime || ''),
+      firstName: String(firstName || ''),
+      lastName: String(lastName || ''),
+      phone: String(phone || ''),
+      status: (status ? String(status) : 'confirmed') as AppointmentStatus,
+      notes: String(notes || ''),
+    });
+
+    if (!result.ok) {
+      res.status(result.statusCode).json({ error: result.error });
+      return;
+    }
+
+    broadcastPublicUpdate('appointment_created');
+    res.status(201).json({ appointment: result.appointment });
+  } catch (error) {
+    console.error('Admin create appointment error:', error);
+    res.status(500).json({ error: 'Erreur lors de la création du rendez-vous.' });
   }
 });
 

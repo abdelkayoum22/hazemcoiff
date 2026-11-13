@@ -157,6 +157,26 @@ export function updateAppointmentStatus(
   });
 }
 
+export function createAdminAppointment(
+  token: string,
+  payload: {
+    serviceId: number;
+    date: string;
+    startTime: string;
+    firstName: string;
+    lastName: string;
+    phone: string;
+    status: AppointmentStatus;
+    notes: string;
+  }
+): Promise<{ appointment: AppointmentRecord }> {
+  return requestJson('/api/admin/appointments', {
+    method: 'POST',
+    headers: adminHeaders(token),
+    body: JSON.stringify(payload),
+  });
+}
+
 export function updateAdminAppointment(
   token: string,
   id: number,

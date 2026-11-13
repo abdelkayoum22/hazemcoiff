@@ -532,3 +532,156 @@ export function updateAppointmentAdmin(
     };
   }
 }
+
+export interface CreateAppointmentAdminInput {
+  serviceId: number;
+  date: string;
+  startTime: string;
+  firstName: string;
+  lastName: string;
+  phone: string;
+  status?: 'pending' | 'confirmed' | 'completed' | 'cancelled';
+  notes?: string;
+}
+
+export function createAppointmentAdmin(input: CreateAppointmentAdminInput): BookingCreationResult {
+  const cleanFirst = input.firstName.trim();
+  const cleanLast = input.lastName.trim();
+  const cleanPhone = input.phone.replace(/\s+/g, ' ').trim();
+  const cleanNotes = (input.notes || '').trim();
+  const status = input.status || 'confirmed';
+
+  if (cleanFirst.length < 2 || cleanFirst.length > 60) {
+    return { ok: false, statusCode: 400, error: 'Le prénom doit contenir entre 2 et 60 caractères.' };
+  }
+  if (cleanLast.length < 2 || cleanLast.length > 60) {
+    return { ok: false, statusCode: 400, error: 'Le nom doit contenir entre 2 et 60 caractères.' };
+  }
+  const digitsOnly = cleanPhone.replace(/[^\d+]/g, '');
+  if (digitsOnly.length < 8 || digitsOnly.length > 15) {
+    return {
+      ok: false,
+      statusCode: 400,
+      error: 'Veuillez saisir un numéro de téléphone valide (ex. 25 180 013).',
+    };
+  }
+  if (!isValidDateString(input.date)) {
+    return { ok: false, statusCode: 400, error: 'La date sélectionnée est invalide.' };
+  }
+  if (!/^\d{2}:\d{2}$/.test(input.startTime)) {
+    return { ok: false, statusCode: 400, error: 'L’horaire sélectionné est invalide.' };
+  }
+  if (!['pending', 'confirmed', 'completed', 'cancelled'].includes(status)) {
+    return { ok: false, statusCode: 400, error: 'Statut invalide.' };
+  }
+
+  try {
+    db.exec('BEGIN IMMEDIATE');
+
+    const service = db
+      .prepare('SELECT * FROM services WHERE id = ?')
+      .get(input.serviceId) as ServiceItem | undefined;
+
+    if (!service) {
+      db.exec('ROLLBACK');
+      return { ok: false, statusCode: 404, error: 'La prestation sélectionnée est introuvable.' };
+    }
+
+    const startMin = timeToMinutes(input.startTime);
+    const endMin = startMin + service.duration_minutes;
+    const endTime = minutesToTime(endMin);
+
+    if (status !== 'cancelled') {
+      const existingAppts = db
+        .prepare(
+          "SELECT start_time, end_time FROM appointments WHERE appointment_date = ? AND status != 'cancelled'"
+        )
+        .all(input.date) as Array<{ start_time: string; end_time: string }>;
+
+      const conflict = existingAppts.some((a) => {
+        const s = timeToMinutes(a.start_time);
+        const e = timeToMinutes(a.end_time);
+        return startMin < e && endMin > s;
+      });
+
+      if (conflict) {
+        db.exec('ROLLBACK');
+        return {
+          ok: false,
+          statusCode: 409,
+          error: 'Cet horaire est déjà pris par un autre rendez-vous à cette date.',
+        };
+      }
+    }
+
+    const existingCustomer = db
+      .prepare("SELECT id FROM customers WHERE replace(replace(phone, ' ', ''), '-', '') = ?")
+      .get(digitsOnly) as { id: number } | undefined;
+
+    let customerId: number;
+    if (existingCustomer) {
+      customerId = existingCustomer.id;
+      db.prepare('UPDATE customers SET first_name = ?, last_name = ?, phone = ? WHERE id = ?').run(
+        cleanFirst,
+        cleanLast,
+        cleanPhone,
+        customerId
+      );
+    } else {
+      const res = db
+        .prepare('INSERT INTO customers (first_name, last_name, phone) VALUES (?, ?, ?)')
+        .run(cleanFirst, cleanLast, cleanPhone);
+      customerId = Number(res.lastInsertRowid);
+    }
+
+    const compactDate = input.date.replace(/-/g, '').slice(2);
+    const randSuffix = String(Math.floor(1000 + Math.random() * 9000));
+    const reference = `HC-${compactDate}-${randSuffix}`;
+
+    const insertResult = db
+      .prepare(`
+        INSERT INTO appointments (
+          reference, customer_id, service_id, service_name,
+          appointment_date, start_time, end_time, duration_minutes, price, status, notes
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `)
+      .run(
+        reference,
+        customerId,
+        service.id,
+        service.name,
+        input.date,
+        input.startTime,
+        endTime,
+        service.duration_minutes,
+        service.price,
+        status,
+        cleanNotes
+      );
+
+    const newId = Number(insertResult.lastInsertRowid);
+    const created = db
+      .prepare(`
+        SELECT a.*, c.first_name, c.last_name, c.phone
+        FROM appointments a
+        JOIN customers c ON a.customer_id = c.id
+        WHERE a.id = ?
+      `)
+      .get(newId) as unknown as AppointmentRecord;
+
+    db.exec('COMMIT');
+    return { ok: true, appointment: created };
+  } catch (err) {
+    try {
+      db.exec('ROLLBACK');
+    } catch {
+      // ignore
+    }
+    console.error('Admin create appointment error:', err);
+    return {
+      ok: false,
+      statusCode: 500,
+      error: 'Erreur lors de l’enregistrement du rendez-vous.',
+    };
+  }
+}

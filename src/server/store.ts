@@ -11,6 +11,7 @@ import {
 import { hashPassword, verifyPassword } from './auth.ts';
 import {
   computeSlotsForDate,
+  createAppointmentAdmin,
   createBookingAtomic,
   getCurrentMinutesOfDay,
   getDayOfWeekFromDate,
@@ -37,6 +38,7 @@ import type {
 } from '../types/barbershop.ts';
 import type {
   BookingCreationResult,
+  CreateAppointmentAdminInput,
   CreateBookingInput,
   UpdateAppointmentAdminInput,
 } from './availability.ts';
@@ -237,11 +239,19 @@ async function ensureSupabaseSeeded(): Promise<boolean> {
   }
 }
 
+const BOOTSTRAP_CACHE_TTL_MS = 15_000;
+let publicBootstrapCache: { data: PublicBootstrapData; expiresAt: number } | null = null;
+
+export function invalidatePublicBootstrapCache(): void {
+  publicBootstrapCache = null;
+}
+
 export async function initDataStore(): Promise<void> {
   initializeDatabaseSeed();
   if (supabaseClient) {
     await ensureSupabaseSeeded();
   }
+  invalidatePublicBootstrapCache();
 }
 
 export function subscribeSupabaseRealtime(onChange: () => void): () => void {
@@ -250,6 +260,7 @@ export function subscribeSupabaseRealtime(onChange: () => void): () => void {
     const channel = supabaseClient
       .channel('hazem-coiff-sync')
       .on('postgres_changes', { event: '*', schema: 'public' }, () => {
+        invalidatePublicBootstrapCache();
         onChange();
       })
       .subscribe();
@@ -266,13 +277,21 @@ export function subscribeSupabaseRealtime(onChange: () => void): () => void {
 // ---------------- PUBLIC DATA ----------------
 
 export async function getPublicBootstrap(): Promise<PublicBootstrapData> {
+  if (publicBootstrapCache && Date.now() < publicBootstrapCache.expiresAt) {
+    return publicBootstrapCache.data;
+  }
+
   if (!supabaseClient) {
-    return getSqlitePublicBootstrap();
+    const data = getSqlitePublicBootstrap();
+    publicBootstrapCache = { data, expiresAt: Date.now() + BOOTSTRAP_CACHE_TTL_MS };
+    return data;
   }
 
   const ready = await ensureSupabaseSeeded();
   if (!ready) {
-    return getSqlitePublicBootstrap();
+    const data = getSqlitePublicBootstrap();
+    publicBootstrapCache = { data, expiresAt: Date.now() + BOOTSTRAP_CACHE_TTL_MS };
+    return data;
   }
 
   try {
@@ -312,13 +331,15 @@ export async function getPublicBootstrap(): Promise<PublicBootstrapData> {
       settingsMap[row.key] = row.value;
     }
 
-    return {
+    const result: PublicBootstrapData = {
       services: (svcsRes.data || []) as ServiceItem[],
       businessHours,
       daysOff: (offRes.data || []) as DayOff[],
       gallery: (galRes.data || []) as GalleryImage[],
       settings: settingsMap as unknown as ShopSettings,
     };
+    publicBootstrapCache = { data: result, expiresAt: Date.now() + BOOTSTRAP_CACHE_TTL_MS };
+    return result;
   } catch (err) {
     console.error('Supabase bootstrap failed, falling back to SQLite:', err);
     return getSqlitePublicBootstrap();
@@ -1066,6 +1087,140 @@ export async function updateAppointmentFullAsync(
   return { ok: true, appointment: flattenJoinedAppointment(updated as JoinedAppointmentRow) };
 }
 
+export async function createAppointmentAdminAsync(
+  input: CreateAppointmentAdminInput
+): Promise<BookingCreationResult> {
+  if (!supabaseClient || !(await ensureSupabaseSeeded())) {
+    return createAppointmentAdmin(input);
+  }
+
+  const cleanFirst = input.firstName.trim();
+  const cleanLast = input.lastName.trim();
+  const cleanPhone = input.phone.replace(/\s+/g, ' ').trim();
+  const cleanNotes = (input.notes || '').trim();
+  const status: AppointmentStatus = input.status || 'confirmed';
+
+  if (cleanFirst.length < 2 || cleanFirst.length > 60) {
+    return { ok: false, statusCode: 400, error: 'Le prénom doit contenir entre 2 et 60 caractères.' };
+  }
+  if (cleanLast.length < 2 || cleanLast.length > 60) {
+    return { ok: false, statusCode: 400, error: 'Le nom doit contenir entre 2 et 60 caractères.' };
+  }
+  const digitsOnly = cleanPhone.replace(/[^\d+]/g, '');
+  if (digitsOnly.length < 8 || digitsOnly.length > 15) {
+    return {
+      ok: false,
+      statusCode: 400,
+      error: 'Veuillez saisir un numéro de téléphone valide (ex. 25 180 013).',
+    };
+  }
+  if (!isValidDateString(input.date)) {
+    return { ok: false, statusCode: 400, error: 'La date sélectionnée est invalide.' };
+  }
+  if (!/^\d{2}:\d{2}$/.test(input.startTime)) {
+    return { ok: false, statusCode: 400, error: 'L’horaire sélectionné est invalide.' };
+  }
+  if (!['pending', 'confirmed', 'completed', 'cancelled'].includes(status)) {
+    return { ok: false, statusCode: 400, error: 'Statut invalide.' };
+  }
+
+  const { data: service } = await supabaseClient
+    .from('services')
+    .select('*')
+    .eq('id', input.serviceId)
+    .maybeSingle();
+
+  if (!service) {
+    return { ok: false, statusCode: 404, error: 'La prestation sélectionnée est introuvable.' };
+  }
+
+  const startMin = timeToMinutes(input.startTime);
+  const endMin = startMin + service.duration_minutes;
+  const endTime = minutesToTime(endMin);
+
+  if (status !== 'cancelled') {
+    const { data: existingAppts } = await supabaseClient
+      .from('appointments')
+      .select('start_time, end_time')
+      .eq('appointment_date', input.date)
+      .neq('status', 'cancelled');
+
+    const conflict = (existingAppts || []).some((a: { start_time: string; end_time: string }) => {
+      const s = timeToMinutes(a.start_time);
+      const e = timeToMinutes(a.end_time);
+      return startMin < e && endMin > s;
+    });
+
+    if (conflict) {
+      return {
+        ok: false,
+        statusCode: 409,
+        error: 'Cet horaire est déjà pris par un autre rendez-vous à cette date.',
+      };
+    }
+  }
+
+  const { data: existingCustomers } = await supabaseClient.from('customers').select('id, phone');
+  const existingCustomer = (existingCustomers || []).find(
+    (c: { id: number; phone: string }) => c.phone.replace(/[\s-]/g, '') === digitsOnly
+  );
+
+  let customerId: number;
+  if (existingCustomer) {
+    customerId = existingCustomer.id;
+    await supabaseClient
+      .from('customers')
+      .update({ first_name: cleanFirst, last_name: cleanLast, phone: cleanPhone })
+      .eq('id', customerId);
+  } else {
+    const { data: insertedCust, error: custErr } = await supabaseClient
+      .from('customers')
+      .insert({ first_name: cleanFirst, last_name: cleanLast, phone: cleanPhone })
+      .select('id')
+      .single();
+    if (custErr || !insertedCust) {
+      return { ok: false, statusCode: 500, error: 'Impossible d’enregistrer le client.' };
+    }
+    customerId = insertedCust.id;
+  }
+
+  const compactDate = input.date.replace(/-/g, '').slice(2);
+  const randSuffix = String(Math.floor(1000 + Math.random() * 9000));
+  const reference = `HC-${compactDate}-${randSuffix}`;
+
+  const { data: insertedAppt, error: apptErr } = await supabaseClient
+    .from('appointments')
+    .insert({
+      reference,
+      customer_id: customerId,
+      service_id: service.id,
+      service_name: service.name,
+      appointment_date: input.date,
+      start_time: input.startTime,
+      end_time: endTime,
+      duration_minutes: service.duration_minutes,
+      price: service.price,
+      status,
+      notes: cleanNotes,
+    })
+    .select('*')
+    .single();
+
+  if (apptErr || !insertedAppt) {
+    return { ok: false, statusCode: 500, error: 'Erreur lors de la création du rendez-vous.' };
+  }
+
+  return {
+    ok: true,
+    appointment: {
+      ...(insertedAppt as AppointmentRecord),
+      first_name: cleanFirst,
+      last_name: cleanLast,
+      phone: cleanPhone,
+    },
+  };
+}
+
 export async function deleteAppointmentAsync(id: number): Promise<boolean> {
   if (!supabaseClient || !(await ensureSupabaseSeeded())) {
     const info = db.prepare('DELETE FROM appointments WHERE id = ?').run(id);
@@ -1118,6 +1273,7 @@ export async function createServiceAsync(payload: {
         payload.image_url,
         maxOrder.m + 1
       );
+    invalidatePublicBootstrapCache();
     return db
       .prepare('SELECT * FROM services WHERE id = ?')
       .get(Number(result.lastInsertRowid)) as unknown as ServiceItem;
@@ -1136,6 +1292,7 @@ export async function createServiceAsync(payload: {
     .select('*')
     .single();
   if (error || !data) throw new Error(error?.message || 'Erreur création prestation.');
+  invalidatePublicBootstrapCache();
   return data as ServiceItem;
 }
 
@@ -1165,6 +1322,7 @@ export async function updateServiceAsync(
         id
       );
     if (info.changes === 0) return null;
+    invalidatePublicBootstrapCache();
     return db.prepare('SELECT * FROM services WHERE id = ?').get(id) as unknown as ServiceItem;
   }
 
@@ -1186,6 +1344,7 @@ export async function updateServiceAsync(
     .select('*')
     .maybeSingle();
   if (error || !data) return null;
+  invalidatePublicBootstrapCache();
   return data as ServiceItem;
 }
 
@@ -1196,9 +1355,11 @@ export async function deleteServiceAsync(id: number): Promise<{ archived?: boole
       .get(id) as { count: number };
     if (usedInAppts.count > 0) {
       db.prepare('UPDATE services SET is_active = 0 WHERE id = ?').run(id);
+      invalidatePublicBootstrapCache();
       return { archived: true };
     }
     db.prepare('DELETE FROM services WHERE id = ?').run(id);
+    invalidatePublicBootstrapCache();
     return { deleted: true };
   }
 
@@ -1209,9 +1370,11 @@ export async function deleteServiceAsync(id: number): Promise<{ archived?: boole
 
   if (count && count > 0) {
     await supabaseClient.from('services').update({ is_active: 0 }).eq('id', id);
+    invalidatePublicBootstrapCache();
     return { archived: true };
   }
   await supabaseClient.from('services').delete().eq('id', id);
+  invalidatePublicBootstrapCache();
   return { deleted: true };
 }
 
@@ -1246,6 +1409,7 @@ export async function updateHoursAsync(
         'SELECT * FROM business_hours ORDER BY CASE WHEN day_of_week = 0 THEN 7 ELSE day_of_week END ASC'
       )
       .all() as unknown as BusinessHour[];
+    invalidatePublicBootstrapCache();
     return { businessHours: updatedHours, slot_interval_minutes: String(interval) };
   }
 
@@ -1272,6 +1436,7 @@ export async function updateHoursAsync(
     const dbDay = b.day_of_week === 0 ? 7 : b.day_of_week;
     return da - dbDay;
   });
+  invalidatePublicBootstrapCache();
   return { businessHours: sorted, slot_interval_minutes: String(interval) };
 }
 
@@ -1289,6 +1454,7 @@ export async function addDayOffAsync(date: string, reason: string): Promise<DayO
       const info = db
         .prepare('INSERT INTO days_off (date, reason) VALUES (?, ?)')
         .run(date, reason || 'Fermeture exceptionnelle');
+      invalidatePublicBootstrapCache();
       return db
         .prepare('SELECT * FROM days_off WHERE id = ?')
         .get(Number(info.lastInsertRowid)) as unknown as DayOff;
@@ -1302,15 +1468,18 @@ export async function addDayOffAsync(date: string, reason: string): Promise<DayO
     .select('*')
     .single();
   if (error || !data) return null;
+  invalidatePublicBootstrapCache();
   return data as DayOff;
 }
 
 export async function deleteDayOffAsync(id: number): Promise<void> {
   if (!supabaseClient || !(await ensureSupabaseSeeded())) {
     db.prepare('DELETE FROM days_off WHERE id = ?').run(id);
+    invalidatePublicBootstrapCache();
     return;
   }
   await supabaseClient.from('days_off').delete().eq('id', id);
+  invalidatePublicBootstrapCache();
 }
 
 export async function listSlotRulesAsync(): Promise<TimeSlotRule[]> {
@@ -1389,6 +1558,7 @@ export async function addGalleryAsync(payload: {
     const info = db
       .prepare('INSERT INTO gallery_images (title, category, image_url, sort_order) VALUES (?, ?, ?, ?)')
       .run(payload.title, payload.category, payload.image_url, maxOrder.m + 1);
+    invalidatePublicBootstrapCache();
     return db
       .prepare('SELECT * FROM gallery_images WHERE id = ?')
       .get(Number(info.lastInsertRowid)) as unknown as GalleryImage;
@@ -1407,6 +1577,7 @@ export async function addGalleryAsync(payload: {
     .select('*')
     .single();
   if (error || !data) throw new Error(error?.message || 'Erreur ajout galerie.');
+  invalidatePublicBootstrapCache();
   return data as GalleryImage;
 }
 
@@ -1419,6 +1590,7 @@ export async function updateGalleryAsync(
       .prepare('UPDATE gallery_images SET title = ?, category = ?, image_url = ? WHERE id = ?')
       .run(payload.title, payload.category, payload.image_url, id);
     if (info.changes === 0) return null;
+    invalidatePublicBootstrapCache();
     return db.prepare('SELECT * FROM gallery_images WHERE id = ?').get(id) as unknown as GalleryImage;
   }
   const { data, error } = await supabaseClient
@@ -1428,15 +1600,18 @@ export async function updateGalleryAsync(
     .select('*')
     .maybeSingle();
   if (error || !data) return null;
+  invalidatePublicBootstrapCache();
   return data as GalleryImage;
 }
 
 export async function deleteGalleryAsync(id: number): Promise<void> {
   if (!supabaseClient || !(await ensureSupabaseSeeded())) {
     db.prepare('DELETE FROM gallery_images WHERE id = ?').run(id);
+    invalidatePublicBootstrapCache();
     return;
   }
   await supabaseClient.from('gallery_images').delete().eq('id', id);
+  invalidatePublicBootstrapCache();
 }
 
 // ---------------- SETTINGS ----------------
@@ -1451,6 +1626,7 @@ export async function updateSettingsAsync(
     for (const item of updates) {
       stmt.run(item.key, item.value);
     }
+    invalidatePublicBootstrapCache();
     return getSqliteSettingsMap();
   }
 
@@ -1462,6 +1638,7 @@ export async function updateSettingsAsync(
   for (const row of (data || []) as Array<{ key: string; value: string }>) {
     map[row.key] = row.value;
   }
+  invalidatePublicBootstrapCache();
   return map as unknown as ShopSettings;
 }
 

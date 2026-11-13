@@ -7,9 +7,18 @@ interface BarberImageProps {
   alt: string;
   className?: string;
   title?: string;
+  width?: number;
+  height?: number;
 }
 
-export function BarberImage({ src, alt, className = '', title }: BarberImageProps) {
+export function BarberImage({
+  src,
+  alt,
+  className = '',
+  title,
+  width = 800,
+  height = 600,
+}: BarberImageProps) {
   const [hasError, setHasError] = useState(false);
   const resolved = resolveImageUrl(src);
 
@@ -34,6 +43,8 @@ export function BarberImage({ src, alt, className = '', title }: BarberImageProp
     <img
       src={resolved}
       alt={alt}
+      width={width}
+      height={height}
       loading="lazy"
       decoding="async"
       referrerPolicy="no-referrer"

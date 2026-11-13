@@ -1,7 +1,13 @@
 import { Suspense, lazy, useCallback, useEffect, useRef, useState } from 'react';
-import { MotionConfig } from 'motion/react';
 import { fetchPublicBootstrap } from './lib/api';
-import type { BusinessHour, PublicBootstrapData, ServiceItem, ShopSettings } from './types/barbershop';
+import { resolveImageUrl } from './lib/images';
+import type {
+  BusinessHour,
+  GalleryImage,
+  PublicBootstrapData,
+  ServiceItem,
+  ShopSettings,
+} from './types/barbershop';
 import { Navbar } from './components/Navbar';
 import { HeroSection } from './components/HeroSection';
 import { ServicesSection } from './components/ServicesSection';
@@ -15,6 +21,8 @@ const BookingModal = lazy(() =>
 const AdminDashboard = lazy(() =>
   import('./components/AdminDashboard').then((m) => ({ default: m.AdminDashboard }))
 );
+
+const BOOTSTRAP_CACHE_KEY = 'hazem_coiff_bootstrap_v1';
 
 const FALLBACK_HOURS: BusinessHour[] = [
   { day_of_week: 1, day_name: 'Lundi', is_open: 1, open_time: '13:00', close_time: '20:30' },
@@ -40,11 +48,146 @@ const FALLBACK_SETTINGS: ShopSettings = {
   barber_role: 'Maître Coiffeur & Barbier · Note 5,0 / 5 (15 avis)',
   about_title: 'Le souci du détail, l’accueil et la maîtrise du geste.',
   about_bio:
-    'Installé au 52 Avenue de Paris à Boumhel El Bassatine, Hazem Coiff vous accueille 7 jours sur 7.',
-  hero_image: '/assets/aistudio/image_1a42b0d4.png',
-  about_image: '/assets/aistudio/Capture_d__cran_2026-11-12_200313_cbb7a2be.png',
-  logo_image: '/assets/aistudio/image_0d689771.png',
+    'Installé au 52 Avenue de Paris à Boumhel El Bassatine, Hazem Coiff vous accueille 7 jours sur 7 dans une salle propre, moderne et soigneusement équipée. Chaque coupe, coiffure de mariage, brushing ou taille de barbe est réalisé avec écoute, précision et attention aux moindres détails.',
+  hero_image: '/assets/optimized/hero.webp',
+  about_image: '/assets/optimized/about.webp',
+  logo_image: '/assets/optimized/logo.webp',
 };
+
+const FALLBACK_SERVICES: ServiceItem[] = [
+  {
+    id: 1,
+    name: 'Coupe classique',
+    description:
+      'Diagnostic morphologique, coupe sur mesure aux ciseaux et finitions précises au coupe-chou, suivie d’un brushing soigné.',
+    price: 20,
+    duration_minutes: 30,
+    image_url: '/src/assets/images/service_classic_cut_1794507920274.jpg',
+    is_active: 1,
+    sort_order: 1,
+  },
+  {
+    id: 2,
+    name: 'Dégradé (Fade)',
+    description:
+      'Dégradé à blanc, bas ou progressif d’une netteté chirurgicale, contours sculptés et transition sans aucune démarcation.',
+    price: 25,
+    duration_minutes: 40,
+    image_url: '/src/assets/images/service_skin_fade_1794507920405.jpg',
+    is_active: 1,
+    sort_order: 2,
+  },
+  {
+    id: 3,
+    name: 'Coupe + Barbe',
+    description:
+      'Notre formule signature : coupe personnalisée, brushing, taille et tracé de barbe au rasoir, serviette chaude et soin hydratant.',
+    price: 35,
+    duration_minutes: 60,
+    image_url: '/src/assets/images/service_cut_beard_1794507920251.jpg',
+    is_active: 1,
+    sort_order: 3,
+  },
+  {
+    id: 4,
+    name: 'Taille de barbe',
+    description:
+      'Restructuration complète des volumes, tracé des joues et du cou à la lame, application d’huile nourrissante.',
+    price: 15,
+    duration_minutes: 30,
+    image_url: '/src/assets/images/service_beard_trim_1794507921722.jpg',
+    is_active: 1,
+    sort_order: 4,
+  },
+  {
+    id: 5,
+    name: 'Rasage traditionnel',
+    description:
+      'Rituel authentique : serviettes chaudes, montage au blaireau, double passage au rasoir droit et soin apaisant après-rasage.',
+    price: 25,
+    duration_minutes: 45,
+    image_url: '/src/assets/images/service_hot_shave_1794507921391.jpg',
+    is_active: 1,
+    sort_order: 5,
+  },
+  {
+    id: 6,
+    name: 'Coupe enfant',
+    description:
+      'Coupe adaptée et patiente pour les jeunes clients, réalisée avec douceur aux ciseaux ou à la tondeuse.',
+    price: 15,
+    duration_minutes: 30,
+    image_url: '/src/assets/images/service_classic_cut_1794507920274.jpg',
+    is_active: 1,
+    sort_order: 6,
+  },
+];
+
+const FALLBACK_GALLERY: GalleryImage[] = [
+  {
+    id: 1,
+    title: 'Dégradé propre & finitions',
+    category: 'Dégradés',
+    image_url: '/assets/optimized/gallery_1.webp',
+    sort_order: 1,
+  },
+  {
+    id: 2,
+    title: 'Coupe & barbe soignée',
+    category: 'Coupes',
+    image_url: '/assets/optimized/gallery_2.webp',
+    sort_order: 2,
+  },
+  {
+    id: 3,
+    title: 'Accueil & satisfaction client',
+    category: 'Salon',
+    image_url: '/assets/optimized/gallery_3.webp',
+    sort_order: 3,
+  },
+  {
+    id: 4,
+    title: 'Coiffure mariage & événement',
+    category: 'Coupes',
+    image_url: '/assets/optimized/gallery_4.webp',
+    sort_order: 4,
+  },
+];
+
+const INITIAL_BOOTSTRAP_DATA: PublicBootstrapData = {
+  services: FALLBACK_SERVICES,
+  businessHours: FALLBACK_HOURS,
+  daysOff: [],
+  gallery: FALLBACK_GALLERY,
+  settings: FALLBACK_SETTINGS,
+};
+
+function readCachedBootstrap(): PublicBootstrapData {
+  try {
+    const raw = window.localStorage.getItem(BOOTSTRAP_CACHE_KEY);
+    if (!raw) return INITIAL_BOOTSTRAP_DATA;
+    const parsed = JSON.parse(raw) as Partial<PublicBootstrapData>;
+    if (
+      parsed &&
+      Array.isArray(parsed.services) &&
+      Array.isArray(parsed.businessHours) &&
+      Array.isArray(parsed.gallery) &&
+      parsed.settings &&
+      typeof parsed.settings.shop_name === 'string'
+    ) {
+      return {
+        services: parsed.services,
+        businessHours: parsed.businessHours,
+        daysOff: Array.isArray(parsed.daysOff) ? parsed.daysOff : [],
+        gallery: parsed.gallery,
+        settings: parsed.settings,
+      };
+    }
+  } catch {
+    // ignore storage errors
+  }
+  return INITIAL_BOOTSTRAP_DATA;
+}
 
 function isAdminLocation(): boolean {
   const cleanPath = window.location.pathname.replace(/\/+$/, '');
@@ -60,10 +203,7 @@ function isAdminLocation(): boolean {
 }
 
 export default function App() {
-  const [data, setData] = useState<PublicBootstrapData | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [loadError, setLoadError] = useState<string | null>(null);
-
+  const [data, setData] = useState<PublicBootstrapData>(() => readCachedBootstrap());
   const [bookingOpen, setBookingOpen] = useState(false);
   const [preselectedService, setPreselectedService] = useState<ServiceItem | null>(null);
   const [viewMode, setViewMode] = useState<'public' | 'admin'>(() =>
@@ -77,11 +217,13 @@ export default function App() {
       const res = await fetchPublicBootstrap();
       lastSyncRef.current = Date.now();
       setData(res);
-      setLoadError(null);
+      try {
+        window.localStorage.setItem(BOOTSTRAP_CACHE_KEY, JSON.stringify(res));
+      } catch {
+        // ignore storage quota errors
+      }
     } catch {
-      setLoadError('Impossible de charger les informations du salon. Veuillez actualiser la page.');
-    } finally {
-      setLoading(false);
+      // Keep rendering cached or instant fallback data so UI stays responsive
     }
   }, []);
 
@@ -154,10 +296,11 @@ export default function App() {
 
   useEffect(() => {
     if (!data?.settings?.logo_image) return;
+    const resolvedLogo = resolveImageUrl(data.settings.logo_image);
     const iconLink = document.querySelector<HTMLLinkElement>('link[rel="icon"]');
-    if (iconLink) iconLink.href = data.settings.logo_image;
+    if (iconLink) iconLink.href = resolvedLogo;
     const appleLink = document.querySelector<HTMLLinkElement>('link[rel="apple-touch-icon"]');
-    if (appleLink) appleLink.href = data.settings.logo_image;
+    if (appleLink) appleLink.href = resolvedLogo;
   }, [data?.settings?.logo_image]);
 
   useEffect(() => {
@@ -191,101 +334,68 @@ export default function App() {
 
   if (viewMode === 'admin') {
     return (
-      <MotionConfig reducedMotion="user">
-        <Suspense
-          fallback={
-            <div className="min-h-screen bg-[#000000] flex items-center justify-center p-6 text-xs tracking-[0.2em] uppercase text-[#8C8889]">
-              Chargement de l’espace admin...
-            </div>
-          }
-        >
-          <AdminDashboard
-            initialHours={data?.businessHours ?? FALLBACK_HOURS}
-            initialSettings={data?.settings ?? FALLBACK_SETTINGS}
-            onExitAdmin={exitAdmin}
-            onDataMutated={loadBootstrap}
-          />
-        </Suspense>
-      </MotionConfig>
-    );
-  }
-
-  if (loading) {
-    return (
-      <div className="min-h-screen bg-[#000000] flex flex-col items-center justify-center p-6 text-center">
-        <p className="font-[family-name:var(--font-display)] italic text-3xl font-medium text-[#FFFFFF] mb-2">
-          Hazem Coiff
-        </p>
-        <p className="text-xs tracking-[0.2em] uppercase text-[#8C8889]">Chargement du salon</p>
-      </div>
-    );
-  }
-
-  if (loadError || !data) {
-    return (
-      <div className="min-h-screen bg-[#000000] flex flex-col items-center justify-center p-6 text-center">
-        <p className="text-base text-[#FFFFFF] mb-4">{loadError || 'Erreur inattendue.'}</p>
-        <button
-          type="button"
-          onClick={() => {
-            setLoading(true);
-            loadBootstrap();
-          }}
-          className="px-5 py-2.5 text-sm font-semibold text-[#000000] bg-[#FFFFFF] hover:bg-[#CFCFD3] rounded transition-colors duration-200 cursor-pointer"
-        >
-          Réessayer
-        </button>
-      </div>
+      <Suspense
+        fallback={
+          <div className="min-h-screen bg-[#000000] flex items-center justify-center p-6 text-xs tracking-[0.2em] uppercase text-[#8C8889]">
+            Chargement de l’espace admin...
+          </div>
+        }
+      >
+        <AdminDashboard
+          initialHours={data.businessHours}
+          initialSettings={data.settings}
+          onExitAdmin={exitAdmin}
+          onDataMutated={loadBootstrap}
+        />
+      </Suspense>
     );
   }
 
   return (
-    <MotionConfig reducedMotion="user">
-      <div className="min-h-screen bg-[#000000] text-[#FFFFFF]">
-        <Navbar
-          shopName={data.settings.shop_name}
-          logoUrl={data.settings.logo_image}
+    <div className="min-h-screen bg-[#000000] text-[#FFFFFF]">
+      <Navbar
+        shopName={data.settings.shop_name}
+        logoUrl={data.settings.logo_image}
+        onOpenBooking={() => openBooking(null)}
+      />
+
+      <main>
+        <HeroSection
+          settings={data.settings}
           onOpenBooking={() => openBooking(null)}
         />
 
-        <main>
-          <HeroSection
-            settings={data.settings}
-            onOpenBooking={() => openBooking(null)}
-          />
+        <ServicesSection
+          services={data.services}
+          onSelectServiceForBooking={(svc) => openBooking(svc)}
+        />
 
-          <ServicesSection
+        <AboutAndPillarsSection
+          settings={data.settings}
+          onOpenBooking={() => openBooking(null)}
+        />
+
+        <GalleryAndReviewsSection gallery={data.gallery} />
+
+        <ContactAndFooter
+          settings={data.settings}
+          businessHours={data.businessHours}
+          onOpenBooking={() => openBooking(null)}
+          onOpenAdmin={enterAdmin}
+        />
+      </main>
+
+      {bookingOpen && (
+        <Suspense fallback={null}>
+          <BookingModal
+            isOpen={bookingOpen}
             services={data.services}
-            onSelectServiceForBooking={(svc) => openBooking(svc)}
+            initialService={preselectedService}
+            onClose={() => setBookingOpen(false)}
+            onBookingCompleted={loadBootstrap}
           />
-
-          <AboutAndPillarsSection
-            settings={data.settings}
-            onOpenBooking={() => openBooking(null)}
-          />
-
-          <GalleryAndReviewsSection gallery={data.gallery} />
-
-          <ContactAndFooter
-            settings={data.settings}
-            businessHours={data.businessHours}
-            onOpenBooking={() => openBooking(null)}
-            onOpenAdmin={enterAdmin}
-          />
-        </main>
-
-        {bookingOpen && (
-          <Suspense fallback={null}>
-            <BookingModal
-              isOpen={bookingOpen}
-              services={data.services}
-              initialService={preselectedService}
-              onClose={() => setBookingOpen(false)}
-              onBookingCompleted={loadBootstrap}
-            />
-          </Suspense>
-        )}
-      </div>
-    </MotionConfig>
+        </Suspense>
+      )}
+    </div>
   );
 }
